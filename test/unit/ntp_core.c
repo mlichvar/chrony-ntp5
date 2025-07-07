@@ -156,11 +156,11 @@ send_response(int interleaved, int authenticated, int allow_update, int valid_ts
   res->stratum = 1;
   res->poll = req->poll;
   res->precision = -20;
-  res->root_delay = UTI_DoubleToNtp32(0.1);
-  res->root_dispersion = UTI_DoubleToNtp32(0.1);
-  res->reference_id = 0;
-  UTI_ZeroNtp64(&res->reference_ts);
-  res->originate_ts = interleaved ? req->receive_ts : req->transmit_ts;
+  res->v4.root_delay = UTI_DoubleToNtp32(0.1);
+  res->v4.root_dispersion = UTI_DoubleToNtp32(0.1);
+  res->v4.reference_id = 0;
+  UTI_ZeroNtp64(&res->v4.reference_ts);
+  res->v4.originate_ts = interleaved ? req->receive_ts : req->transmit_ts;
 
   advance_time(TST_GetRandomDouble(1e-4, 1e-2));
   UTI_TimespecToNtp64(&current_time, &res->receive_ts, NULL);
@@ -171,13 +171,13 @@ send_response(int interleaved, int authenticated, int allow_update, int valid_ts
   if (!valid_ts) {
     switch (random() % (allow_update ? 4 : 5)) {
       case 0:
-        res->originate_ts.hi = random();
+        res->v4.originate_ts.hi = random();
         break;
       case 1:
-        res->originate_ts.lo = random();
+        res->v4.originate_ts.lo = random();
         break;
       case 2:
-        UTI_ZeroNtp64(&res->originate_ts);
+        UTI_ZeroNtp64(&res->v4.originate_ts);
         break;
       case 3:
         UTI_ZeroNtp64(&res->receive_ts);

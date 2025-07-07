@@ -518,7 +518,7 @@ NNC_CheckResponseAuth(NNC_Instance inst, NTP_Packet *packet,
 
   if (!has_valid_uniq_id || !has_valid_auth) {
     if (has_valid_uniq_id && packet->stratum == NTP_INVALID_STRATUM &&
-        ntohl(packet->reference_id) == NTP_KOD_NTS_NAK) {
+        ntohl(packet->v4.reference_id) == NTP_KOD_NTS_NAK) {
       DEBUG_LOG("NTS NAK");
       inst->nak_response = 1;
       return 0;
