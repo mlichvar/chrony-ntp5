@@ -370,11 +370,18 @@ do_size_checks(void)
   assert(offsetof(NTP_Packet, stratum)         ==  1);
   assert(offsetof(NTP_Packet, poll)            ==  2);
   assert(offsetof(NTP_Packet, precision)       ==  3);
-  assert(offsetof(NTP_Packet, root_delay)      ==  4);
-  assert(offsetof(NTP_Packet, root_dispersion) ==  8);
-  assert(offsetof(NTP_Packet, reference_id)    == 12);
-  assert(offsetof(NTP_Packet, reference_ts)    == 16);
-  assert(offsetof(NTP_Packet, originate_ts)    == 24);
+  assert(offsetof(NTP_Packet, v4.root_delay)   ==  4);
+  assert(offsetof(NTP_Packet, v4.root_dispersion) == 8);
+  assert(offsetof(NTP_Packet, v4.reference_id) == 12);
+  assert(offsetof(NTP_Packet, v4.reference_ts) == 16);
+  assert(offsetof(NTP_Packet, v4.originate_ts) == 24);
+  assert(offsetof(NTP_Packet, v5.timescale)    ==  4);
+  assert(offsetof(NTP_Packet, v5.era)          ==  5);
+  assert(offsetof(NTP_Packet, v5.flags)        ==  6);
+  assert(offsetof(NTP_Packet, v5.root_delay)   ==  8);
+  assert(offsetof(NTP_Packet, v5.root_dispersion) == 12);
+  assert(offsetof(NTP_Packet, v5.server_cookie) == 16);
+  assert(offsetof(NTP_Packet, v5.client_cookie) == 24);
   assert(offsetof(NTP_Packet, receive_ts)      == 32);
   assert(offsetof(NTP_Packet, transmit_ts)     == 40);
   assert(offsetof(NTP_Packet, extensions)      == 48);
@@ -1228,19 +1235,19 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
  
   message.poll = my_poll;
   message.precision = precision;
-  message.root_delay = UTI_DoubleToNtp32(our_root_delay);
-  message.root_dispersion = UTI_DoubleToNtp32(our_root_dispersion);
-  message.reference_id = htonl(our_ref_id);
+  message.v4.root_delay = UTI_DoubleToNtp32(our_root_delay);
+  message.v4.root_dispersion = UTI_DoubleToNtp32(our_root_dispersion);
+  message.v4.reference_id = htonl(our_ref_id);
 
   /* Now fill in timestamps */
 
-  UTI_TimespecToNtp64(&our_ref_time, &message.reference_ts, NULL);
+  UTI_TimespecToNtp64(&our_ref_time, &message.v4.reference_ts, NULL);
 
   /* Don't reveal timestamps which are not necessary for the protocol */
 
   if (my_mode != MODE_CLIENT || interleaved) {
     /* Originate - this comes from the last packet the source sent us */
-    message.originate_ts = interleaved ? *remote_ntp_rx : *remote_ntp_tx;
+    message.v4.originate_ts = interleaved ? *remote_ntp_rx : *remote_ntp_tx;
 
     do {
       /* Prepare random bits which will be added to the receive timestamp */
@@ -1255,10 +1262,10 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
       /* Do not send a packet with a non-zero receive timestamp equal to the
          originate timestamp or previous receive timestamp */
     } while (!UTI_IsZeroNtp64(&message.receive_ts) &&
-             UTI_IsEqualAnyNtp64(&message.receive_ts, &message.originate_ts,
+             UTI_IsEqualAnyNtp64(&message.receive_ts, &message.v4.originate_ts,
                                  local_ntp_rx, NULL));
   } else {
-    UTI_ZeroNtp64(&message.originate_ts);
+    UTI_ZeroNtp64(&message.v4.originate_ts);
     UTI_ZeroNtp64(&message.receive_ts);
   }
 
@@ -1301,7 +1308,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
        (the precision must be at least -30 to prevent an infinite loop!) */
   } while (!UTI_IsZeroNtp64(&message.transmit_ts) &&
            UTI_IsEqualAnyNtp64(&message.transmit_ts, &message.receive_ts,
-                               &message.originate_ts, local_ntp_tx));
+                               &message.v4.originate_ts, local_ntp_tx));
 
   /* Encode in server timestamps a flag indicating RX timestamp to avoid
      saving all RX timestamps for detection of interleaved requests */
@@ -1809,7 +1816,7 @@ check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_Local_Address *local
      (assuming it uses the same address as the one from which we send requests
      to the source) */
   if (message->stratum > 1 &&
-      message->reference_id == htonl(UTI_IPToRefid(&local_addr->ip_addr)))
+      message->v4.reference_id == htonl(UTI_IPToRefid(&local_addr->ip_addr)))
     return 0;
 
   /* Compare our reference data with the source to make sure it is not us
@@ -1819,13 +1826,13 @@ check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_Local_Address *local
                          &our_ref_id, &our_ref_time, &our_root_delay, &our_root_dispersion);
 
   if (message->stratum == our_stratum &&
-      message->reference_id == htonl(our_ref_id) &&
-      message->root_delay == UTI_DoubleToNtp32(our_root_delay) &&
-      !UTI_IsZeroNtp64(&message->reference_ts)) {
+      message->v4.reference_id == htonl(our_ref_id) &&
+      message->v4.root_delay == UTI_DoubleToNtp32(our_root_delay) &&
+      !UTI_IsZeroNtp64(&message->v4.reference_ts)) {
     NTP_int64 ntp_ref_time;
 
     UTI_TimespecToNtp64(&our_ref_time, &ntp_ref_time, NULL);
-    if (UTI_CompareNtp64(&message->reference_ts, &ntp_ref_time) == 0) {
+    if (UTI_CompareNtp64(&message->v4.reference_ts, &ntp_ref_time) == 0) {
       DEBUG_LOG("Source %s is me", UTI_IPToString(&inst->remote_addr.ip_addr));
       return 0;
     }
@@ -2015,13 +2022,13 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
 
   pkt_leap = NTP_LVM_TO_LEAP(message->lvm);
   pkt_version = NTP_LVM_TO_VERSION(message->lvm);
-  pkt_refid = ntohl(message->reference_id);
+  pkt_refid = ntohl(message->v4.reference_id);
   if (ef_mono_root) {
     pkt_root_delay = UTI_Ntp32f28ToDouble(ef_mono_root->root_delay);
     pkt_root_dispersion = UTI_Ntp32f28ToDouble(ef_mono_root->root_dispersion);
   } else {
-    pkt_root_delay = UTI_Ntp32ToDouble(message->root_delay);
-    pkt_root_dispersion = UTI_Ntp32ToDouble(message->root_dispersion);
+    pkt_root_delay = UTI_Ntp32ToDouble(message->v4.root_delay);
+    pkt_root_dispersion = UTI_Ntp32ToDouble(message->v4.root_dispersion);
   }
 
   /* Check if the packet is valid per RFC 5905 (section 8) and RFC 9769.
@@ -2033,15 +2040,15 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
 
   /* Test 2 checks for bogus packet in the basic and interleaved modes.  This
      ensures the source is responding to the latest packet we sent to it. */
-  test2n = !UTI_CompareNtp64(&message->originate_ts, &inst->local_ntp_tx);
+  test2n = !UTI_CompareNtp64(&message->v4.originate_ts, &inst->local_ntp_tx);
   test2i = inst->interleaved &&
-           !UTI_CompareNtp64(&message->originate_ts, &inst->local_ntp_rx);
+           !UTI_CompareNtp64(&message->v4.originate_ts, &inst->local_ntp_rx);
   test2 = test2n || test2i;
   interleaved_packet = !test2n && test2i;
   
   /* Test 3 checks for invalid timestamps.  This can happen when the
      association if not properly 'up'. */
-  test3 = !UTI_IsZeroNtp64(&message->originate_ts) &&
+  test3 = !UTI_IsZeroNtp64(&message->v4.originate_ts) &&
           !UTI_IsZeroNtp64(&message->receive_ts) &&
           !UTI_IsZeroNtp64(&message->transmit_ts);
 
@@ -2346,8 +2353,8 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
             message->stratum == NTP_INVALID_STRATUM || message->stratum == 1 ?
               UTI_RefidToString(pkt_refid) : "");
   DEBUG_LOG("reference=%s origin=%s receive=%s transmit=%s",
-            UTI_Ntp64ToString(&message->reference_ts),
-            UTI_Ntp64ToString(&message->originate_ts),
+            UTI_Ntp64ToString(&message->v4.reference_ts),
+            UTI_Ntp64ToString(&message->v4.originate_ts),
             UTI_Ntp64ToString(&message->receive_ts),
             UTI_Ntp64ToString(&message->transmit_ts));
   DEBUG_LOG("offset=%.9f delay=%.9f dispersion=%f root_delay=%f root_dispersion=%f",
@@ -2379,7 +2386,7 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
       /* Assume the reference ID and stratum of the server */
       if (synced_packet && inst->remote_stratum > 0) {
         inst->remote_stratum--;
-        SRC_SetRefid(inst->source, ntohl(message->reference_id), &inst->remote_addr.ip_addr);
+        SRC_SetRefid(inst->source, ntohl(message->v4.reference_id), &inst->remote_addr.ip_addr);
       } else {
         SRC_ResetInstance(inst->source);
       }
@@ -2461,7 +2468,7 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
     inst->report.root_delay = pkt_root_delay;
     inst->report.root_dispersion = pkt_root_dispersion;
     inst->report.ref_id = pkt_refid;
-    UTI_Ntp64ToTimespec(&message->reference_ts, &inst->report.ref_time);
+    UTI_Ntp64ToTimespec(&message->v4.reference_ts, &inst->report.ref_time);
     inst->report.offset = sample.offset;
     inst->report.peer_delay = sample.peer_delay;
     inst->report.peer_dispersion = sample.peer_dispersion;
@@ -2744,9 +2751,9 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
      client starting with a zero origin timestamp, the third response is the
      earliest one that can be interleaved. */
   if (kod == 0 && log_index >= 0 && info.version == 4 &&
-      message->originate_ts.lo & htonl(1) &&
+      message->v4.originate_ts.lo & htonl(1) &&
       UTI_CompareNtp64(&message->receive_ts, &message->transmit_ts) != 0) {
-    ntp_rx = message->originate_ts;
+    ntp_rx = message->v4.originate_ts;
     local_ntp_rx = &ntp_rx;
     zero_local_timestamp(&local_tx);
     interleaved = CLG_GetNtpTxTimestamp(&ntp_rx, &local_tx.ts, &local_tx.source);

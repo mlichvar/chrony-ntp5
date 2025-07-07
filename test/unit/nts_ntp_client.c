@@ -181,7 +181,7 @@ prepare_response(NNC_Instance inst, NTP_Packet *packet, NTP_PacketInfo *info, in
 
   if (nak) {
     packet->stratum = NTP_INVALID_STRATUM;
-    packet->reference_id = htonl(NTP_KOD_NTS_NAK);
+    packet->v4.reference_id = htonl(NTP_KOD_NTS_NAK);
     return;
   }
 

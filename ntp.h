@@ -88,11 +88,26 @@ typedef struct {
   uint8_t stratum;
   int8_t poll;
   int8_t precision;
-  NTP_int32 root_delay;
-  NTP_int32 root_dispersion;
-  NTP_int32 reference_id;
-  NTP_int64 reference_ts;
-  NTP_int64 originate_ts;
+
+  union {
+    struct {
+      NTP_int32 root_delay;
+      NTP_int32 root_dispersion;
+      NTP_int32 reference_id;
+      NTP_int64 reference_ts;
+      NTP_int64 originate_ts;
+    } v4;
+    struct {
+      uint8_t timescale;
+      uint8_t era;
+      uint16_t flags;
+      NTP_int32 root_delay;
+      NTP_int32 root_dispersion;
+      NTP_int64 server_cookie;
+      NTP_int64 client_cookie;
+    } v5;
+  };
+
   NTP_int64 receive_ts;
   NTP_int64 transmit_ts;
 
