@@ -162,6 +162,9 @@ struct NCR_Instance_Record {
      be used for synchronisation */
   int valid_timestamps;
 
+  /* NTPv5 server cookie from the last valid response */
+  NTP_int64 remote_ntp_cookie;
+
   /* Receive and transmit timestamps from the last valid response */
   NTP_int64 remote_ntp_monorx;
   NTP_int64 remote_ntp_rx;
@@ -683,12 +686,17 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
   }
 
   if (result->ext_field_flags || result->interleaved)
-    result->version = NTP_VERSION;
-  else
+    result->version = 4;
+  else {
     result->version = NAU_GetSuggestedNtpVersion(result->auth);
+    if (result->version == 5)
+      result->version = 4;
+  }
 
   if (params->version)
     result->version = CLAMP(NTP_MIN_COMPAT_VERSION, params->version, NTP_VERSION);
+
+  /* TODO: make sure mode is client if version == 5 */
 
   /* Create a source instance for this NTP source */
   result->source = SRC_CreateNewInstance(UTI_IPToRefid(&remote_addr->ip_addr),
@@ -791,6 +799,7 @@ NCR_ResetInstance(NCR_Instance instance)
 
   instance->valid_rx = 0;
   instance->valid_timestamps = 0;
+  UTI_ZeroNtp64(&instance->remote_ntp_cookie);
   UTI_ZeroNtp64(&instance->remote_ntp_monorx);
   UTI_ZeroNtp64(&instance->remote_ntp_rx);
   UTI_ZeroNtp64(&instance->remote_ntp_tx);
@@ -1136,6 +1145,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                 uint32_t kod, /* KoD code - 0 disabled */
                 int ext_field_flags, /* Extension fields to be included in the packet */
                 NAU_Instance auth, /* The authentication to be used for the packet */
+                NTP_int64 *remote_ntp_cookie, /* The server cookie from received packet */
                 NTP_int64 *remote_ntp_rx, /* The receive timestamp from received packet */
                 NTP_int64 *remote_ntp_tx, /* The transmit timestamp from received packet */
                 NTP_Local_Timestamp *local_rx, /* The RX time of the received packet */
@@ -1156,7 +1166,8 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
   struct timespec local_receive, local_transmit;
   double smooth_offset, local_transmit_err;
   int ret, precision;
-  NTP_int64 ts_fuzz;
+  NTP_int64 ts_fuzz, ntp_dummy;
+  NTP_int64 *ntp_rx, *ntp_tx, *ntp_orig;
 
   /* Parameters read from reference module */
   int are_we_synchronised, our_stratum, smooth_time;
@@ -1235,19 +1246,55 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
  
   message.poll = my_poll;
   message.precision = precision;
-  message.v4.root_delay = UTI_DoubleToNtp32(our_root_delay);
-  message.v4.root_dispersion = UTI_DoubleToNtp32(our_root_dispersion);
-  message.v4.reference_id = htonl(our_ref_id);
 
-  /* Now fill in timestamps */
+  if (version == 5) {
+    message.lvm &= 0x3f;
+    message.v5.timescale = NTP_TIMESCALE_UTC;
+    message.v5.era = 0;
+    message.v5.flags = (leap_status != LEAP_Unsynchronised ? htons(NTP_FLAG_SYNCHRONISED) : 0) |
+                       (interleaved ? htons(NTP_FLAG_INTERLEAVED) : 0);
+    message.v5.root_delay = UTI_DoubleToNtp32f28(our_root_delay);
+    message.v5.root_dispersion = UTI_DoubleToNtp32f28(our_root_dispersion);
+  } else {
+    message.v4.root_delay = UTI_DoubleToNtp32(our_root_delay);
+    message.v4.root_dispersion = UTI_DoubleToNtp32(our_root_dispersion);
+    message.v4.reference_id = htonl(our_ref_id);
+  }
 
-  UTI_TimespecToNtp64(&our_ref_time, &message.v4.reference_ts, NULL);
+  /* Now fill in timestamps/cookies */
+
+  if (version == 5) {
+    /* Map NTPv5 fields to NTPv4 */
+    if (my_mode != MODE_CLIENT) {
+      /* TODO: avoid looking at request? */
+      remote_ntp_rx = remote_ntp_tx = &request->v5.client_cookie;
+
+      UTI_ZeroNtp64(&message.v5.server_cookie);
+      ntp_orig = &message.v5.client_cookie;
+      ntp_rx = &message.receive_ts;
+      ntp_tx = &message.transmit_ts;
+    } else {
+      message.precision = 0;
+      remote_ntp_rx = remote_ntp_cookie;
+
+      ntp_orig = &message.v5.server_cookie;
+      ntp_rx = &ntp_dummy;
+      UTI_ZeroNtp64(&message.receive_ts);
+      ntp_tx = &message.v5.client_cookie;
+      UTI_ZeroNtp64(&message.transmit_ts);
+    }
+  } else {
+    UTI_TimespecToNtp64(&our_ref_time, &message.v4.reference_ts, NULL);
+    ntp_orig = &message.v4.originate_ts;
+    ntp_rx = &message.receive_ts;
+    ntp_tx = &message.transmit_ts;
+  }
 
   /* Don't reveal timestamps which are not necessary for the protocol */
 
   if (my_mode != MODE_CLIENT || interleaved) {
     /* Originate - this comes from the last packet the source sent us */
-    message.v4.originate_ts = interleaved ? *remote_ntp_rx : *remote_ntp_tx;
+    *ntp_orig = interleaved ? *remote_ntp_rx : *remote_ntp_tx;
 
     do {
       /* Prepare random bits which will be added to the receive timestamp */
@@ -1257,16 +1304,15 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
          This timestamp will have been adjusted so that it will now look to
          the source like we have been running on our latest estimate of
          frequency all along */
-      UTI_TimespecToNtp64(&local_receive, &message.receive_ts, &ts_fuzz);
+      UTI_TimespecToNtp64(&local_receive, ntp_rx, &ts_fuzz);
 
       /* Do not send a packet with a non-zero receive timestamp equal to the
          originate timestamp or previous receive timestamp */
-    } while (!UTI_IsZeroNtp64(&message.receive_ts) &&
-             UTI_IsEqualAnyNtp64(&message.receive_ts, &message.v4.originate_ts,
-                                 local_ntp_rx, NULL));
+    } while (!UTI_IsZeroNtp64(ntp_rx) &&
+             UTI_IsEqualAnyNtp64(ntp_rx, ntp_orig, local_ntp_rx, NULL));
   } else {
-    UTI_ZeroNtp64(&message.v4.originate_ts);
-    UTI_ZeroNtp64(&message.receive_ts);
+    UTI_ZeroNtp64(ntp_orig);
+    UTI_ZeroNtp64(ntp_rx);
   }
 
   if (!parse_packet(&message, NTP_HEADER_LENGTH, &info))
@@ -1297,7 +1343,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
     }
 
     UTI_TimespecToNtp64(interleaved ? &local_tx->ts : &local_transmit,
-                        &message.transmit_ts, &ts_fuzz);
+                        ntp_tx, &ts_fuzz);
 
     /* Do not send a packet with a non-zero transmit timestamp which is
        equal to any of the following timestamps:
@@ -1306,15 +1352,22 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                     in the symmetric mode)
        - previous transmit (to invalidate responses to the previous packet)
        (the precision must be at least -30 to prevent an infinite loop!) */
-  } while (!UTI_IsZeroNtp64(&message.transmit_ts) &&
-           UTI_IsEqualAnyNtp64(&message.transmit_ts, &message.receive_ts,
-                               &message.v4.originate_ts, local_ntp_tx));
+  } while (!UTI_IsZeroNtp64(ntp_tx) &&
+           UTI_IsEqualAnyNtp64(ntp_tx, ntp_rx, ntp_orig, local_ntp_tx));
 
   /* Encode in server timestamps a flag indicating RX timestamp to avoid
-     saving all RX timestamps for detection of interleaved requests */
+     saving all RX timestamps for detection of NTPv4 interleaved requests */
   if (my_mode == MODE_SERVER || my_mode == MODE_PASSIVE) {
-    message.receive_ts.lo |= htonl(1);
-    message.transmit_ts.lo &= ~htonl(1);
+    ntp_rx->lo |= htonl(1);
+    ntp_tx->lo &= ~htonl(1);
+
+    if (version == 5 && request->v5.flags & htons(NTP_FLAG_INTERLEAVED)) {
+      /* Make the NTPv5 server cookie and RX timestamp different in order to
+         force the client to use the right one */
+      message.v5.server_cookie = *ntp_rx;
+      ntp_rx = &message.v5.server_cookie;
+      ntp_rx->lo &= ~htonl(1);
+    }
   }
 
   /* Generate the authentication data */
@@ -1355,9 +1408,9 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
   }
 
   if (local_ntp_rx)
-    *local_ntp_rx = message.receive_ts;
+    *local_ntp_rx = *ntp_rx;
   if (local_ntp_tx)
-    *local_ntp_tx = message.transmit_ts;
+    *local_ntp_tx = *ntp_tx;
 
   return ret;
 }
@@ -1473,6 +1526,7 @@ transmit_timeout(void *arg)
   /* Send the request (which may also be a response in the symmetric mode) */
   sent = transmit_packet(inst->mode, interleaved, inst->local_poll, inst->version, 0,
                          inst->ext_field_flags, inst->auth,
+                         initial ? NULL : &inst->remote_ntp_cookie,
                          initial ? NULL : &inst->remote_ntp_rx,
                          initial ? &inst->init_remote_ntp_tx : &inst->remote_ntp_tx,
                          initial ? &inst->init_local_rx : &inst->local_rx,
@@ -1608,7 +1662,7 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
   }
 
   /* Check for a crypto NAK */
-  if (remainder == 4 && ntohl(*(uint32_t *)(data + parsed)) == 0) {
+  if (info->version == 4 && remainder == 4 && ntohl(*(uint32_t *)(data + parsed)) == 0) {
     info->auth.mode = NTP_AUTH_SYMMETRIC;
     info->auth.mac.start = parsed;
     info->auth.mac.length = remainder;
@@ -1616,11 +1670,12 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
     return 1;
   }
 
-  /* Parse the rest of the NTPv4 packet */
+  /* Parse the rest of the NTPv4 or NTPv5 packet  */
 
   while (remainder > 0) {
     /* Check if the remaining data is a MAC */
-    if (remainder >= NTP_MIN_MAC_LENGTH && remainder <= NTP_MAX_V4_MAC_LENGTH)
+    if (info->version == 4 &&
+        remainder >= NTP_MIN_MAC_LENGTH && remainder <= NTP_MAX_V4_MAC_LENGTH)
       break;
 
     /* Check if this is a valid NTPv4 extension field and skip it */
@@ -2021,8 +2076,12 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
   }
 
   pkt_leap = NTP_LVM_TO_LEAP(message->lvm);
+  if (info->version == 5 && message->v5.flags & !htons(NTP_FLAG_SYNCHRONISED))
+    pkt_leap = LEAP_Unsynchronised;
+
   pkt_version = NTP_LVM_TO_VERSION(message->lvm);
   pkt_refid = ntohl(message->v4.reference_id);
+
   if (ef_mono_root) {
     pkt_root_delay = UTI_Ntp32f28ToDouble(ef_mono_root->root_delay);
     pkt_root_dispersion = UTI_Ntp32f28ToDouble(ef_mono_root->root_dispersion);
@@ -2040,11 +2099,16 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
 
   /* Test 2 checks for bogus packet in the basic and interleaved modes.  This
      ensures the source is responding to the latest packet we sent to it. */
-  test2n = !UTI_CompareNtp64(&message->v4.originate_ts, &inst->local_ntp_tx);
-  test2i = inst->interleaved &&
-           !UTI_CompareNtp64(&message->v4.originate_ts, &inst->local_ntp_rx);
-  test2 = test2n || test2i;
-  interleaved_packet = !test2n && test2i;
+  if (info->version == 5) {
+    test2 = !UTI_CompareNtp64(&message->v5.client_cookie, &inst->local_ntp_tx);
+    interleaved_packet = !!(message->v5.flags & htons(NTP_FLAG_INTERLEAVED));
+  } else {
+    test2n = !UTI_CompareNtp64(&message->v4.originate_ts, &inst->local_ntp_tx);
+    test2i = inst->interleaved &&
+      !UTI_CompareNtp64(&message->v4.originate_ts, &inst->local_ntp_rx);
+    test2 = test2n || test2i;
+    interleaved_packet = !test2n && test2i;
+  }
   
   /* Test 3 checks for invalid timestamps.  This can happen when the
      association if not properly 'up'. */
@@ -2290,6 +2354,10 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
       (inst->mode == MODE_ACTIVE && valid_packet &&
        (!inst->valid_rx ||
         UTI_CompareNtp64(&inst->remote_ntp_tx, &message->transmit_ts) < 0))) {
+    if (info->version == 5)
+      inst->remote_ntp_cookie = message->v5.server_cookie;
+    else
+      UTI_ZeroNtp64(&inst->remote_ntp_cookie);
     inst->remote_ntp_rx = message->receive_ts;
     inst->remote_ntp_tx = message->transmit_ts;
     inst->local_rx = *rx_ts;
@@ -2750,16 +2818,20 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
      transmit timestamp (this is verified in transmit_packet()).  For a new
      client starting with a zero origin timestamp, the third response is the
      earliest one that can be interleaved. */
-  if (kod == 0 && log_index >= 0 && info.version == 4 &&
-      message->v4.originate_ts.lo & htonl(1) &&
-      UTI_CompareNtp64(&message->receive_ts, &message->transmit_ts) != 0) {
-    ntp_rx = message->v4.originate_ts;
+  if (kod == 0 && log_index >= 0 &&
+      ((info.version == 4 && message->v4.originate_ts.lo & htonl(1) &&
+        UTI_CompareNtp64(&message->receive_ts, &message->transmit_ts) != 0) ||
+       (info.version == 5 && message->v5.flags & htons(NTP_FLAG_INTERLEAVED)))) {
+    if (info.version == 5)
+      ntp_rx = message->v5.server_cookie;
+    else
+      ntp_rx = message->v4.originate_ts;
     local_ntp_rx = &ntp_rx;
     zero_local_timestamp(&local_tx);
     interleaved = CLG_GetNtpTxTimestamp(&ntp_rx, &local_tx.ts, &local_tx.source);
 
     tx_ts = &local_tx;
-    if (interleaved)
+    if (interleaved && info.version == 4)
       CLG_DisableNtpTimestamps(&ntp_rx);
   }
 
@@ -2767,17 +2839,18 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
                      info.auth.mode != NTP_AUTH_MSSNTP,
                      rx_ts->source, interleaved ? tx_ts->source : NTP_TS_DAEMON);
 
-  /* Suggest the client to increase its polling interval if it indicates
-     the interval is shorter than the rate limiting interval */
-  poll = CLG_GetNtpMinPoll();
-  poll = MAX(poll, message->poll);
-
   /* Respond with the same version */
   version = info.version;
 
+  /* Suggest the client to increase its polling interval if it indicates
+     the interval is shorter than the rate limiting interval */
+  poll = CLG_GetNtpMinPoll();
+  if (version < 5)
+    poll = MAX(poll, message->poll);
+
   /* Send a reply */
   if (!transmit_packet(my_mode, interleaved, poll, version, kod, info.ext_field_flags, NULL,
-                       &message->receive_ts, &message->transmit_ts,
+                       NULL, &message->receive_ts, &message->transmit_ts,
                        rx_ts, tx_ts, local_ntp_rx, NULL, remote_addr, local_addr,
                        message, &info))
     return;
@@ -2800,10 +2873,17 @@ update_tx_timestamp(NTP_Local_Timestamp *tx_ts, NTP_Local_Timestamp *new_tx_ts,
   }
 
   /* Check if this is the last packet that was sent */
-  if ((local_ntp_rx && UTI_CompareNtp64(&message->receive_ts, local_ntp_rx)) ||
-      (local_ntp_tx && UTI_CompareNtp64(&message->transmit_ts, local_ntp_tx))) {
-    DEBUG_LOG("RX/TX timestamp mismatch");
-    return;
+  if (NTP_LVM_TO_VERSION(message->lvm) == 5) {
+    if ((local_ntp_tx && UTI_CompareNtp64(&message->v5.client_cookie, local_ntp_tx))) {
+      DEBUG_LOG("RX/TX timestamp mismatch");
+      return;
+    }
+  } else {
+    if ((local_ntp_rx && UTI_CompareNtp64(&message->receive_ts, local_ntp_rx)) ||
+        (local_ntp_tx && UTI_CompareNtp64(&message->transmit_ts, local_ntp_tx))) {
+      DEBUG_LOG("RX/TX timestamp mismatch");
+      return;
+    }
   }
 
   delay = UTI_DiffTimespecsToDouble(&new_tx_ts->ts, &tx_ts->ts);
@@ -3276,8 +3356,8 @@ broadcast_timeout(void *arg)
   UTI_ZeroNtp64(&orig_ts);
   zero_local_timestamp(&recv_ts);
 
-  transmit_packet(MODE_BROADCAST, 0, poll, NTP_VERSION, 0, 0, destination->auth,
-                  &orig_ts, &orig_ts, &recv_ts, NULL, NULL, NULL,
+  transmit_packet(MODE_BROADCAST, 0, poll, 4, 0, 0, destination->auth,
+                  NULL, &orig_ts, &orig_ts, &recv_ts, NULL, NULL, NULL,
                   &destination->addr, &destination->local_addr, NULL, NULL);
 
   /* Requeue timeout.  We don't care if interval drifts gradually. */

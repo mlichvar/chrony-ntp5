@@ -92,6 +92,7 @@ get_request(NNC_Instance inst)
 
   memset(&packet, 0, sizeof (packet));
   memset(&info, 0, sizeof (info));
+  /* TODO: NTPv5 */
   info.version = 4;
   info.mode = MODE_CLIENT;
   info.length = random() % (sizeof (packet) + 1);

@@ -439,6 +439,7 @@ test_unit(void)
   for (i = 0; i < 1000; i++) {
     source.params.interleaved = random() % 2;
     source.params.authkey = random() % 2 ? get_random_key_id() : INACTIVE_AUTHKEY;
+    /* TODO: NTPv5 */
     source.params.version = random() % 4 + 1;
 
     UTI_ZeroTimespec(&current_time);
@@ -585,7 +586,7 @@ test_unit(void)
   }
 
   memset(&packet, 0, sizeof (packet));
-  packet.lvm = NTP_LVM(LEAP_Normal, NTP_VERSION, MODE_CLIENT);
+  packet.lvm = NTP_LVM(LEAP_Normal, 4, MODE_CLIENT);
 
   TEST_CHECK(parse_packet(&packet, NTP_HEADER_LENGTH, &info));
   TEST_CHECK(info.auth.mode == NTP_AUTH_NONE);

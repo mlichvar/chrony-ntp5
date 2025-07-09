@@ -330,7 +330,8 @@ If the *extfield* or *xleave* option is used, the default version is 4. If
 those options are not used and the *key* option specifies a key using a hash
 function with an output size longer than 160 bits (e.g. SHA256), the default
 version is 3 for compatibility with older *chronyd* servers. In other cases,
-the default version is 4.
+the default version is 4. The maximum version is 5, but the NTPv5 support is
+experimental.
 *copy*:::
 This option specifies that the server and client are closely related, their
 configuration does not allow a synchronisation loop to form between them, and

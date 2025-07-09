@@ -153,7 +153,7 @@ test_unit(void)
       case 0:
         inst = NAU_CreateNoneInstance();
         TEST_CHECK(!NAU_IsAuthEnabled(inst));
-        TEST_CHECK(NAU_GetSuggestedNtpVersion(inst) == 4);
+        TEST_CHECK(NAU_GetSuggestedNtpVersion(inst) == 5);
         mode = NTP_AUTH_NONE;
         can_auth_req = 1;
         can_auth_res = 1;
@@ -163,7 +163,7 @@ test_unit(void)
         inst = NAU_CreateSymmetricInstance(key_id);
         TEST_CHECK(NAU_IsAuthEnabled(inst));
         TEST_CHECK(NAU_GetSuggestedNtpVersion(inst) ==
-                   (KEY_KeyKnown(inst->key_id) && KEY_GetAuthLength(inst->key_id) > 20 ? 3 : 4));
+                   (KEY_KeyKnown(inst->key_id) && KEY_GetAuthLength(inst->key_id) > 20 ? 3 : 5));
         mode = NTP_AUTH_SYMMETRIC;
         can_auth_req = KEY_KeyKnown(key_id);
         can_auth_res = can_auth_req;
@@ -171,7 +171,7 @@ test_unit(void)
       case 2:
         inst = NAU_CreateNtsInstance(&nts_addr, "test", 0, 0);
         TEST_CHECK(NAU_IsAuthEnabled(inst));
-        TEST_CHECK(NAU_GetSuggestedNtpVersion(inst) == 4);
+        TEST_CHECK(NAU_GetSuggestedNtpVersion(inst) == 5);
         mode = NTP_AUTH_NTS;
         can_auth_req = 0;
         can_auth_res = 0;
