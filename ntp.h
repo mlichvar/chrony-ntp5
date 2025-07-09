@@ -143,6 +143,7 @@ typedef struct {
 
 #define NTP_EF_NET_CORRECTION           0x010A
 #define NTP_EF_EXP_MONO_ROOT            0xF323
+#define NTP_EF_DRAFT_ID                 0xF5FF
 
 #define NTP_EF_FLAG_NET_CORRECTION      0x1
 #define NTP_EF_FLAG_EXP_MONO_ROOT       0x2
@@ -163,6 +164,8 @@ typedef struct {
 } NTP_EFExpMonoRoot;
 
 #define NTP_EF_EXP_MONO_ROOT_MAGIC      0xF5BEDD9AU
+
+#define NTP_EF_DRAFT_ID_STRING          "draft-ietf-ntp-ntpv5-05"
 
 /* Authentication extension fields */
 
