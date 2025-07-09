@@ -41,8 +41,8 @@ typedef uint32_t NTP_int32;
 /* The UDP port number used by NTP */
 #define NTP_PORT 123
 
-/* The NTP protocol version that we support */
-#define NTP_VERSION 4
+/* The latest NTP protocol version that we support */
+#define NTP_VERSION 5
 
 /* Maximum stratum number (infinity) */
 #define NTP_MAX_STRATUM 16
@@ -82,6 +82,17 @@ typedef enum {
   MODE_SERVER = 4,
   MODE_BROADCAST = 5
 } NTP_Mode;
+
+typedef enum {
+  NTP_TIMESCALE_UTC = 0,
+  NTP_TIMESCALE_TAI = 1,
+  NTP_TIMESCALE_UT1 = 2,
+  NTP_TIMESCALE_SMEARED_UTC = 3,
+} NTP_Timescale;
+
+#define NTP_FLAG_SYNCHRONISED 0x1
+#define NTP_FLAG_INTERLEAVED 0x2
+#define NTP_FLAG_AUTH_NAK 0x4
 
 typedef struct {
   uint8_t lvm;
