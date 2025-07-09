@@ -140,7 +140,7 @@ get_request(NNC_Instance inst)
 
   if (info.length % 4 == 0 && info.length >= NTP_HEADER_LENGTH &&
       inst->cookies[inst->cookie_index].length % 4 == 0 &&
-      inst->cookies[inst->cookie_index].length >= (NTP_MIN_EF_LENGTH - 4) &&
+      inst->cookies[inst->cookie_index].length >= (NTP_MIN_V4_EF_LENGTH - 4) &&
       expected_length <= sizeof (packet)) {
     TEST_CHECK(NNC_GenerateRequestAuth(inst, &packet, &info));
     TEST_CHECK(info.length == expected_length);
@@ -193,7 +193,7 @@ prepare_response(NNC_Instance inst, NTP_Packet *packet, NTP_PacketInfo *info, in
   do {
     cookie_length = random() % (sizeof (cookie) + 1);
   } while (cookie_length % 4 != 0 ||
-           ((index != 2) == (cookie_length < NTP_MIN_EF_LENGTH - 4 ||
+           ((index != 2) == (cookie_length < NTP_MIN_V4_EF_LENGTH - 4 ||
                              cookie_length > NKE_MAX_COOKIE_LENGTH)));
 
   min_auth_length = random() % (512 + 1);

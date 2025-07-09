@@ -428,7 +428,8 @@ extract_cookies(NNC_Instance inst, unsigned char *plaintext, int length)
     if (ef_type != NTP_EF_NTS_COOKIE)
       continue;
 
-    if (ef_length < NTP_MIN_EF_LENGTH || ef_body_length > sizeof (inst->cookies[0].cookie)) {
+    if (ef_length < NTP_MIN_V4_EF_LENGTH || ef_body_length % 4 != 0 ||
+        ef_body_length > sizeof (inst->cookies[0].cookie)) {
       DEBUG_LOG("Unexpected cookie length %d", ef_body_length);
       continue;
     }

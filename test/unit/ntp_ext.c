@@ -41,7 +41,7 @@ test_unit(void)
   buffer = (unsigned char *)packet.extensions;
 
   for (i = 0; i < 10000; i++) {
-    body_length = random() % (sizeof (body) - 4 + 1) / 4 * 4;
+    body_length = random() % (sizeof (body) - 4 + 1);
     start = random() % (sizeof (packet.extensions) - body_length - 4 + 1) / 4 * 4;
     type = random() % 0x10000;
 
@@ -54,22 +54,16 @@ test_unit(void)
                              type, body, body_length + 4, &length));
     TEST_CHECK(!NEF_SetField(buffer, body_length + start + 4, start + 4,
                              type, body, body_length, &length));
-    TEST_CHECK(!NEF_SetField(buffer, body_length + start + 4, start,
-                             type, body, body_length - 1, &length));
-    TEST_CHECK(!NEF_SetField(buffer, body_length + start + 4, start,
-                             type, body, body_length - 2, &length));
-    TEST_CHECK(!NEF_SetField(buffer, body_length + start + 4, start,
-                             type, body, body_length - 3, &length));
     TEST_CHECK(!NEF_SetField(buffer, body_length + start + 3, start,
                              type, body, body_length, &length));
     TEST_CHECK(!NEF_SetField(buffer, body_length + start + 5, start + 1,
                              type, body, body_length, &length));
 
-    TEST_CHECK(NEF_SetField(buffer, body_length + start + 4, start,
+    TEST_CHECK(NEF_SetField(buffer, (body_length + 3) / 4 * 4 + start + 4, start,
                             type, body, body_length, &length));
-    TEST_CHECK(length == body_length + 4);
+    TEST_CHECK(length == (body_length + 3) / 4 * 4 + 4);
     TEST_CHECK(((uint16_t *)buffer)[start / 2] == htons(type));
-    TEST_CHECK(((uint16_t *)buffer)[start / 2 + 1] == htons(length));
+    TEST_CHECK(((uint16_t *)buffer)[start / 2 + 1] == htons(body_length + 4));
     TEST_CHECK(memcmp(buffer + start + 4, body, body_length) == 0);
 
     memset(&packet, 0, sizeof (packet));
@@ -80,6 +74,7 @@ test_unit(void)
     info.length = NTP_HEADER_LENGTH;
     TEST_CHECK(!NEF_AddBlankField(&packet, &info, type, body_length, &bodyp));
 
+    /* TODO: NTPv5 */
     info.version = 4;
     info.length = NTP_HEADER_LENGTH - 4;
     TEST_CHECK(!NEF_AddBlankField(&packet, &info, type, body_length, &bodyp));
@@ -89,7 +84,7 @@ test_unit(void)
 
     info.length = NTP_HEADER_LENGTH + start;
 
-    if (body_length < 12) {
+    if (body_length < 12 || body_length % 4 != 0) {
       TEST_CHECK(!NEF_AddBlankField(&packet, &info, type, body_length, &bodyp));
       continue;
     }

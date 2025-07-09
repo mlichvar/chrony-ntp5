@@ -199,7 +199,7 @@ send_response(int interleaved, int authenticated, int allow_update, int valid_ts
     efs = random() % 5;
 
     for (i = 0; i < efs; i++) {
-      ef_len = (i + 1 == efs ? NTP_MAX_V4_MAC_LENGTH + 4 : NTP_MIN_EF_LENGTH) +
+      ef_len = (i + 1 == efs ? NTP_MAX_V4_MAC_LENGTH + 4 : NTP_MIN_V4_EF_LENGTH) +
                4 * (random() % 10);
       TEST_CHECK(NEF_SetField((unsigned char *)res, sizeof (*res), res_length, 0,
                               buf, ef_len - 4, &ef_len));

@@ -54,8 +54,8 @@ typedef uint32_t NTP_int32;
 #define NTP_MIN_MAC_LENGTH (4 + 16)
 #define NTP_MAX_MAC_LENGTH (4 + MAX_HASH_LENGTH)
 
-/* The minimum valid length of an extension field */
-#define NTP_MIN_EF_LENGTH 16
+/* The minimum valid length of an extension field in NTPv4 */
+#define NTP_MIN_V4_EF_LENGTH 16
 
 /* The maximum assumed length of all extension fields in an NTP packet,
    including a MAC (RFC 5905 doesn't specify a limit on length or number of
