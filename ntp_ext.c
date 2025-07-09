@@ -42,6 +42,7 @@ format_field(unsigned char *buffer, int buffer_length, int start,
              int type, int body_length, int *length, void **body)
 {
   struct ExtFieldHeader *header;
+  int ef_length, padding_length;
 
   if (buffer_length < 0 || start < 0 || buffer_length <= start ||
       buffer_length - start < sizeof (*header) || start % 4 != 0)
@@ -49,14 +50,22 @@ format_field(unsigned char *buffer, int buffer_length, int start,
 
   header = (struct ExtFieldHeader *)(buffer + start);
 
-  if (body_length < 0 || sizeof (*header) + body_length > 0xffff ||
-      start + sizeof (*header) + body_length > buffer_length || body_length % 4 != 0)
+  padding_length = 4 - body_length % 4;
+  if (padding_length == 4)
+    padding_length = 0;
+
+  ef_length = sizeof (*header) + body_length + padding_length;
+
+  if (body_length < 0 || ef_length > 0xffff || start + ef_length > buffer_length)
     return 0;
 
-  header->type = htons(type);
-  header->length = htons(sizeof (*header) + body_length);
-  *length = sizeof (*header) + body_length;
+  *length = ef_length;
   *body = header + 1;
+
+  header->type = htons(type);
+  header->length = htons(ef_length - padding_length);
+  if (padding_length > 0)
+    memset((char *)*body + body_length, 0, padding_length);
 
   return 1;
 }
@@ -87,15 +96,15 @@ NEF_AddBlankField(NTP_Packet *packet, NTP_PacketInfo *info, int type, int body_l
   if (length < NTP_HEADER_LENGTH || length >= sizeof (*packet) || length % 4 != 0)
     return 0;
 
-  /* Only NTPv4 packets can have extension fields */
-  if (info->version != 4)
+  /* Only NTPv4 and NTPv5 packets can have extension fields */
+  if (info->version < 4)
     return 0;
 
   if (!format_field((unsigned char *)packet, sizeof (*packet), length,
                     type, body_length, &ef_length, body))
     return 0;
 
-  if (ef_length < NTP_MIN_EF_LENGTH)
+  if (info->version == 4 && (body_length % 4 != 0 || ef_length < NTP_MIN_V4_EF_LENGTH))
     return 0;
 
   info->length += ef_length;
@@ -127,7 +136,7 @@ NEF_ParseSingleField(unsigned char *buffer, int buffer_length, int start,
                      int *length, int *type, void **body, int *body_length)
 {
   struct ExtFieldHeader *header;
-  int ef_length;
+  int ef_length, body_len;
 
   if (buffer_length < 0 || start < 0 || buffer_length <= start ||
       buffer_length - start < sizeof (*header))
@@ -138,6 +147,10 @@ NEF_ParseSingleField(unsigned char *buffer, int buffer_length, int start,
   assert(sizeof (*header) == 4);
 
   ef_length = ntohs(header->length);
+  body_len = ef_length - sizeof (*header);
+
+  if (ef_length % 4 != 0)
+    ef_length += 4 - ef_length % 4;
 
   if (ef_length < (int)(sizeof (*header)) || start + ef_length > buffer_length ||
       ef_length % 4 != 0)
@@ -150,7 +163,7 @@ NEF_ParseSingleField(unsigned char *buffer, int buffer_length, int start,
   if (body)
     *body = header + 1;
   if (body_length)
-    *body_length = ef_length - sizeof (*header);
+    *body_length = body_len;
 
   return 1;
 }
@@ -161,28 +174,30 @@ int
 NEF_ParseField(NTP_Packet *packet, int packet_length, int start,
                int *length, int *type, void **body, int *body_length)
 {
-  int ef_length;
+  int ef_length, version;
 
   if (packet_length <= NTP_HEADER_LENGTH || packet_length > sizeof (*packet) ||
       packet_length <= start || packet_length % 4 != 0 ||
       start < NTP_HEADER_LENGTH || start % 4 != 0)
     return 0;
 
-  /* Only NTPv4 packets have extension fields */
-  if (NTP_LVM_TO_VERSION(packet->lvm) != 4)
+  version = NTP_LVM_TO_VERSION(packet->lvm);
+
+  /* Only NTPv4 and NTPv5 packets have extension fields */
+  if (version < 4)
     return 0;
 
   /* Check if the remaining data is a MAC.  RFC 7822 specifies the maximum
      length of a MAC in NTPv4 packets in order to enable deterministic
      parsing. */
-  if (packet_length - start <= NTP_MAX_V4_MAC_LENGTH)
+  if (version == 4 && packet_length - start <= NTP_MAX_V4_MAC_LENGTH)
     return 0;
 
   if (!NEF_ParseSingleField((unsigned char *)packet, packet_length, start,
                             &ef_length, type, body, body_length))
     return 0;
 
-  if (ef_length < NTP_MIN_EF_LENGTH)
+  if (version == 4 && (ef_length < NTP_MIN_V4_EF_LENGTH || *body_length % 4 != 0))
     return 0;
 
   if (length)
