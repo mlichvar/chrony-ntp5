@@ -1138,6 +1138,20 @@ add_ef_net_correction(NTP_Packet *message, NTP_PacketInfo *info,
 /* ================================================== */
 
 static int
+add_ef_draft_id(NTP_Packet *message, NTP_PacketInfo *info)
+{
+  if (!NEF_AddField(message, info, NTP_EF_DRAFT_ID, NTP_EF_DRAFT_ID_STRING,
+                    sizeof (NTP_EF_DRAFT_ID_STRING) - 1)) {
+    DEBUG_LOG("Could not add EF");
+    return 0;
+  }
+
+  return 1;
+}
+
+/* ================================================== */
+
+static int
 transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                 int interleaved, /* Flag enabling interleaved mode */
                 int my_poll, /* The log2 of the local poll interval */
@@ -1328,6 +1342,11 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                             our_root_delay, our_root_dispersion))
         return 0;
     }
+  }
+
+  if (version == 5) {
+    if (!add_ef_draft_id(&message, &info))
+      return 0;
   }
 
   do {
@@ -1610,7 +1629,7 @@ is_exp_ef(void *body, int body_length, int expected_body_length, uint32_t magic)
 static int
 parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
 {
-  int parsed, remainder, ef_length, ef_type, ef_body_length;
+  int parsed, remainder, ef_length, ef_type, ef_body_length, has_draft_id = 0;
   unsigned char *data;
   void *ef_body;
 
@@ -1703,6 +1722,11 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
                       NTP_EF_EXP_MONO_ROOT_MAGIC))
           info->ext_field_flags |= NTP_EF_FLAG_EXP_MONO_ROOT;
         break;
+      case NTP_EF_DRAFT_ID:
+        if (ef_body_length == strlen(NTP_EF_DRAFT_ID_STRING) &&
+            memcmp(ef_body, NTP_EF_DRAFT_ID_STRING, strlen(NTP_EF_DRAFT_ID_STRING)) == 0)
+          has_draft_id = 1;
+        break;
       default:
         DEBUG_LOG("Unknown extension field type=%x", (unsigned int)ef_type);
     }
@@ -1710,6 +1734,11 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
     info->ext_fields++;
     parsed += ef_length;
     remainder = info->length - parsed;
+  }
+
+  if (info->version == 5 && !has_draft_id) {
+    DEBUG_LOG("Unknown or unexpected NTPv5 draft version");
+    return 0;
   }
 
   if (remainder == 0) {
