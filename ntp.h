@@ -143,6 +143,7 @@ typedef struct {
 
 #define NTP_EF_NET_CORRECTION           0x010A
 #define NTP_EF_EXP_MONO_ROOT            0xF323
+#define NTP_EF_PADDING                  0xF501
 #define NTP_EF_DRAFT_ID                 0xF5FF
 
 #define NTP_EF_FLAG_NET_CORRECTION      0x1
