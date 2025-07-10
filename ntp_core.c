@@ -1138,6 +1138,25 @@ add_ef_net_correction(NTP_Packet *message, NTP_PacketInfo *info,
 /* ================================================== */
 
 static int
+add_ef_padding(NTP_Packet *message, NTP_PacketInfo *info, int length)
+{
+  /* TODO: drop this large buffer */
+  char buf[NTP_MAX_EXTENSIONS_LENGTH] = {0};
+
+  if (length < 4 || length - 4 > sizeof (buf))
+    return 0;
+
+  if (!NEF_AddField(message, info, NTP_EF_PADDING, buf, length - 4)) {
+    DEBUG_LOG("Could not add EF");
+    return 0;
+  }
+
+  return 1;
+}
+
+/* ================================================== */
+
+static int
 add_ef_draft_id(NTP_Packet *message, NTP_PacketInfo *info)
 {
   if (!NEF_AddField(message, info, NTP_EF_DRAFT_ID, NTP_EF_DRAFT_ID_STRING,
@@ -1347,6 +1366,12 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
   if (version == 5) {
     if (!add_ef_draft_id(&message, &info))
       return 0;
+
+    /* TODO: compensate for MAC EF and NTS authenticator/padding */
+    if (request_info && request_info->length > info.length) {
+      if (!add_ef_padding(&message, &info, request_info->length - info.length))
+        return 0;
+    }
   }
 
   do {
@@ -1721,6 +1746,8 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
         if (is_exp_ef(ef_body, ef_body_length, sizeof (NTP_EFExpMonoRoot),
                       NTP_EF_EXP_MONO_ROOT_MAGIC))
           info->ext_field_flags |= NTP_EF_FLAG_EXP_MONO_ROOT;
+        break;
+      case NTP_EF_PADDING:
         break;
       case NTP_EF_DRAFT_ID:
         if (ef_body_length == strlen(NTP_EF_DRAFT_ID_STRING) &&
