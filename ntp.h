@@ -139,6 +139,9 @@ typedef struct {
 #define NTP_REFID_LOCAL 0x7F7F0101UL /* 127.127.1.1 */
 #define NTP_REFID_SMOOTH 0x7F7F01FFUL /* 127.127.1.255 */
 
+/* Length of the NTPv5 bloom filter containing reference IDs */
+#define NTP_BLOOM_FILTER_LENGTH (4096 / 8)
+
 /* Non-authentication extension fields and corresponding internal flags */
 
 #define NTP_EF_NET_CORRECTION           0x010A
