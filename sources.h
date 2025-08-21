@@ -33,6 +33,7 @@
 #include "sysincl.h"
 
 #include "ntp.h"
+#include "reference.h"
 #include "reports.h"
 #include "sourcestats.h"
 
@@ -99,6 +100,13 @@ extern void SRC_SetActive(SRC_Instance inst);
 
 /* This routine sets the source as not receiving reachability updates */
 extern void SRC_UnsetActive(SRC_Instance inst);
+
+/* This routine updates the NTPv5 reference ID Bloom filter */
+extern void SRC_UpdateReferenceIds(SRC_Instance inst, uint8_t *fragment,
+                                   int offset, int length);
+
+/* This routine returns the NTPv5 reference ID Bloom filter */
+extern REF_ReferenceIds *SRC_GetReferenceIds(SRC_Instance inst);
 
 /* This routine updates the reachability register */
 extern void SRC_UpdateReachability(SRC_Instance inst, int reachable);
