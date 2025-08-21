@@ -95,6 +95,7 @@ struct SRC_Instance_Record {
   uint32_t ref_id;              /* The reference ID of this source
                                    (i.e. from its IP address, NOT the
                                    reference _it_ is sync'd to) */
+  REF_ReferenceIds ref_ids;
   IPAddr *ip_addr;              /* Its IP address if NTP source */
 
   /* Flag indicating that the source is updating reachability */
@@ -361,6 +362,7 @@ void SRC_DestroyInstance(SRC_Instance instance)
 void
 SRC_ResetInstance(SRC_Instance instance)
 {
+  SRC_UpdateReferenceIds(instance, NULL, 0, 0);
   instance->updates = 0;
   instance->reachability = 0;
   instance->reachability_size = 0;
@@ -390,6 +392,25 @@ SRC_SetRefid(SRC_Instance instance, uint32_t ref_id, IPAddr *addr)
   instance->ref_id = ref_id;
   instance->ip_addr = addr;
   SST_SetRefid(instance->stats, ref_id, addr);
+}
+
+/* ================================================== */
+
+void
+SRC_UpdateReferenceIds(SRC_Instance instance, uint8_t *fragment, int offset, int length)
+{
+  if (!fragment)
+    REF_ZeroReferenceIds(&instance->ref_ids);
+  else
+    REF_UpdateReferenceIds(&instance->ref_ids, fragment, offset, length);
+}
+
+/* ================================================== */
+
+REF_ReferenceIds *
+SRC_GetReferenceIds(SRC_Instance inst)
+{
+  return &inst->ref_ids;
 }
 
 /* ================================================== */
@@ -869,7 +890,8 @@ unselect_selected_source(LOG_Severity severity, const char *format, ...)
 
 static int
 combine_sources(int n_sel_sources, struct timespec *ref_time, double *offset,
-                double *offset_sd, double *frequency, double *frequency_sd, double *skew)
+                double *offset_sd, double *frequency, double *frequency_sd, double *skew,
+                REF_ReferenceIds *ref_ids)
 {
   struct timespec src_ref_time;
   double src_offset, src_offset_sd, src_frequency, src_frequency_sd, src_skew;
@@ -939,6 +961,8 @@ combine_sources(int n_sel_sources, struct timespec *ref_time, double *offset,
     inv_sum2_frequency_sd += 1.0 / SQUARE(src_frequency_sd);
     inv_sum2_skew += 1.0 / SQUARE(src_skew);
 
+    REF_AddReferenceIds(&sources[index]->ref_ids, ref_ids);
+
     combined++;
   }
 
@@ -975,6 +999,7 @@ SRC_SelectSource(SRC_Instance updated_inst)
   double best_lo, best_hi, distance, sel_src_distance, max_score;
   double best_trust_lo, best_trust_hi;
   double first_sample_ago, max_reach_sample_ago;
+  REF_ReferenceIds ref_ids;
   NTP_Leap leap_status;
 
   if (updated_inst) {
@@ -1498,12 +1523,14 @@ SRC_SelectSource(SRC_Instance updated_inst)
                       &src_frequency, &src_frequency_sd, &src_skew,
                       &src_root_delay, &src_root_dispersion);
 
+  ref_ids = sources[selected_source_index]->ref_ids;
+
   combined = combine_sources(n_sel_sources, &ref_time, &src_offset, &src_offset_sd,
-                             &src_frequency, &src_frequency_sd, &src_skew);
+                             &src_frequency, &src_frequency_sd, &src_skew, &ref_ids);
 
   REF_SetReference(sources[selected_source_index]->stratum,
                    leap_status, combined,
-                   sources[selected_source_index]->ref_id, NULL,
+                   sources[selected_source_index]->ref_id, &ref_ids,
                    sources[selected_source_index]->ip_addr,
                    &ref_time, src_offset, src_offset_sd,
                    src_frequency, src_frequency_sd, src_skew,
