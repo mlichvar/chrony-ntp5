@@ -147,10 +147,13 @@ typedef struct {
 #define NTP_EF_NET_CORRECTION           0x010A
 #define NTP_EF_EXP_MONO_ROOT            0xF323
 #define NTP_EF_PADDING                  0xF501
+#define NTP_EF_REFERENCE_IDS_REQ        0xF503
+#define NTP_EF_REFERENCE_IDS_RESP       0xF504
 #define NTP_EF_DRAFT_ID                 0xF5FF
 
 #define NTP_EF_FLAG_NET_CORRECTION      0x1
 #define NTP_EF_FLAG_EXP_MONO_ROOT       0x2
+#define NTP_EF_FLAG_REFERENCE_IDS       0x4
 
 /* Network Correction extension field */
 typedef struct {
@@ -196,6 +199,11 @@ typedef struct {
 
   int ext_fields;
   int ext_field_flags;
+
+  struct {
+    int offset;
+    int length;
+  } ef_ref_ids;
 
   struct {
     NTP_AuthMode mode;

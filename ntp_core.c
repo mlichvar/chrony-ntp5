@@ -696,6 +696,9 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
   if (params->version)
     result->version = CLAMP(NTP_MIN_COMPAT_VERSION, params->version, NTP_VERSION);
 
+  if (result->version == 5)
+    result->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
+
   /* TODO: make sure mode is client if version == 5 */
 
   /* Create a source instance for this NTP source */
@@ -1157,6 +1160,49 @@ add_ef_padding(NTP_Packet *message, NTP_PacketInfo *info, int length)
 /* ================================================== */
 
 static int
+add_ef_reference_ids_req(NTP_Packet *message, NTP_PacketInfo *info, int offset, int length)
+{
+  uint16_t buf[NTP_BLOOM_FILTER_LENGTH / sizeof (uint16_t)] = {0};
+
+  if (length < 0 || length > sizeof (buf))
+    return 0;
+
+  buf[0] = htons(offset);
+
+  if (!NEF_AddField(message, info, NTP_EF_REFERENCE_IDS_REQ, buf, length)) {
+    DEBUG_LOG("Could not add EF");
+    return 0;
+  }
+
+  return 1;
+}
+
+/* ================================================== */
+
+static int
+add_ef_reference_ids_resp(NTP_Packet *message, NTP_PacketInfo *info, int offset, int length)
+{
+  REF_ReferenceIds *ref_ids;
+
+  if (offset < 0 || offset > sizeof (ref_ids->filter) ||
+      length < 0 || length > sizeof (ref_ids->filter) ||
+      offset + length > sizeof (ref_ids->filter))
+    return 0;
+
+  ref_ids = REF_GetReferenceIds();
+
+  if (!NEF_AddField(message, info, NTP_EF_REFERENCE_IDS_RESP, ref_ids->filter + offset,
+                    length)) {
+    DEBUG_LOG("Could not add EF");
+    return 0;
+  }
+
+  return 1;
+}
+
+/* ================================================== */
+
+static int
 add_ef_draft_id(NTP_Packet *message, NTP_PacketInfo *info)
 {
   if (!NEF_AddField(message, info, NTP_EF_DRAFT_ID, NTP_EF_DRAFT_ID_STRING,
@@ -1364,6 +1410,18 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
   }
 
   if (version == 5) {
+    if (ext_field_flags & NTP_EF_FLAG_REFERENCE_IDS) {
+      if (my_mode == MODE_CLIENT) {
+        /* TODO use smaller fragments */
+        if (!add_ef_reference_ids_req(&message, &info, 0, NTP_BLOOM_FILTER_LENGTH))
+          return 0;
+      } else {
+        if (!add_ef_reference_ids_resp(&message, &info, request_info->ef_ref_ids.offset,
+                                       request_info->ef_ref_ids.length))
+          return 0;
+      }
+    }
+
     if (!add_ef_draft_id(&message, &info))
       return 0;
 
@@ -1668,6 +1726,8 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
   info->mode = NTP_LVM_TO_MODE(packet->lvm);
   info->ext_fields = 0;
   info->ext_field_flags = 0;
+  info->ef_ref_ids.offset = 0;
+  info->ef_ref_ids.length = 0;
   info->auth.mode = NTP_AUTH_NONE;
 
   if (info->version < NTP_MIN_COMPAT_VERSION || info->version > NTP_MAX_COMPAT_VERSION) {
@@ -1748,6 +1808,21 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
           info->ext_field_flags |= NTP_EF_FLAG_EXP_MONO_ROOT;
         break;
       case NTP_EF_PADDING:
+        break;
+      case NTP_EF_REFERENCE_IDS_REQ:
+        if (info->version == 5 && info->mode == MODE_CLIENT && ef_body_length >= 4) {
+          uint16_t offset = ntohs(*(uint16_t *)ef_body);
+
+          if (offset + ef_body_length <= NTP_BLOOM_FILTER_LENGTH) {
+            info->ef_ref_ids.offset = offset;
+            info->ef_ref_ids.length = ef_body_length;
+            info->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
+          }
+        }
+        break;
+      case NTP_EF_REFERENCE_IDS_RESP:
+        if (info->version == 5 && info->mode == MODE_SERVER && ef_body_length >= 4)
+          info->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
         break;
       case NTP_EF_DRAFT_ID:
         if (ef_body_length == strlen(NTP_EF_DRAFT_ID_STRING) &&
@@ -1910,8 +1985,8 @@ check_delay_dev_ratio(NCR_Instance inst, SST_Stats stats,
 /* ================================================== */
 
 static int
-check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_Local_Address *local_addr,
-                struct timespec *local_ts)
+check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_PacketInfo *info,
+                NTP_Local_Address *local_addr, struct timespec *local_ts)
 {
   double our_root_delay, our_root_dispersion;
   int are_we_synchronised, our_stratum;
@@ -1927,7 +2002,11 @@ check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_Local_Address *local
      (assuming it uses the same address as the one from which we send requests
      to the source) */
   if (message->stratum > 1 &&
-      message->v4.reference_id == htonl(UTI_IPToRefid(&local_addr->ip_addr)))
+      ((info->version <= 4 &&
+        message->v4.reference_id == htonl(UTI_IPToRefid(&local_addr->ip_addr))) ||
+       (info->version == 5 &&
+        /* TODO use the latest fragment from this response */
+        !REF_CheckReferenceIds(SRC_GetReferenceIds(inst->source)))))
     return 0;
 
   /* Compare our reference data with the source to make sure it is not us
@@ -2095,6 +2174,8 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
   void *ef_body;
   NTP_EFNetCorrection *ef_net_correction;
   NTP_EFExpMonoRoot *ef_mono_root;
+  uint8_t *ef_reference_ids;
+  int ef_reference_ids_length;
 
   NTP_Local_Timestamp local_receive, local_transmit;
   double remote_interval, local_interval, response_time;
@@ -2107,6 +2188,8 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
 
   ef_mono_root = NULL;
   ef_net_correction = NULL;
+  ef_reference_ids = NULL;
+  ef_reference_ids_length = 0;
 
   /* Find requested non-authentication extension fields */
   if (inst->ext_field_flags & info->ext_field_flags) {
@@ -2126,6 +2209,10 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
               is_exp_ef(ef_body, ef_body_length, sizeof (*ef_mono_root),
                         NTP_EF_EXP_MONO_ROOT_MAGIC))
             ef_mono_root = ef_body;
+          break;
+        case NTP_EF_REFERENCE_IDS_RESP:
+          ef_reference_ids = ef_body;
+          ef_reference_ids_length = ef_body_length;
           break;
       }
     }
@@ -2382,7 +2469,7 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
 
     /* Test D requires that the source is not synchronised to us and is not us
        to prevent a synchronisation loop */
-    testD = check_sync_loop(inst, message, local_addr, &rx_ts->ts);
+    testD = check_sync_loop(inst, message, info, local_addr, &rx_ts->ts);
   } else {
     remote_interval = local_interval = response_time = 0.0;
     sample.offset = sample.peer_delay = sample.peer_dispersion = 0.0;
@@ -2504,6 +2591,9 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
     inst->prev_tx_count = inst->tx_count;
     inst->tx_count = 0;
 
+    if (ef_reference_ids && ef_reference_ids_length == NTP_BLOOM_FILTER_LENGTH)
+      SRC_UpdateReferenceIds(inst->source, ef_reference_ids, 0, ef_reference_ids_length);
+
     SRC_UpdateReachability(inst->source, synced_packet);
 
     if (inst->copy) {
@@ -2511,6 +2601,7 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
       if (synced_packet && inst->remote_stratum > 0) {
         inst->remote_stratum--;
         SRC_SetRefid(inst->source, ntohl(message->v4.reference_id), &inst->remote_addr.ip_addr);
+        /* TODO overwrite our own reference IDs? */
       } else {
         SRC_ResetInstance(inst->source);
       }
