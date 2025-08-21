@@ -1503,7 +1503,7 @@ SRC_SelectSource(SRC_Instance updated_inst)
 
   REF_SetReference(sources[selected_source_index]->stratum,
                    leap_status, combined,
-                   sources[selected_source_index]->ref_id,
+                   sources[selected_source_index]->ref_id, NULL,
                    sources[selected_source_index]->ip_addr,
                    &ref_time, src_offset, src_offset_sd,
                    src_frequency, src_frequency_sd, src_skew,

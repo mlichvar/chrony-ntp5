@@ -62,6 +62,8 @@ static int our_leap_sec;
 static int our_tai_offset;
 static int our_stratum;
 static uint32_t our_ref_id;
+static REF_ReferenceIds our_own_ref_id;
+static REF_ReferenceIds our_ref_ids;
 static IPAddr our_ref_ip;
 static struct timespec our_ref_time;
 static double unsynchronised_since;
@@ -213,6 +215,14 @@ REF_Initialise(void)
   drift_file_age = 0.0;
   local_activate_ok = 0;
 
+  memset(our_own_ref_id.filter, 0, sizeof (our_own_ref_id.filter));
+  for (int i = 0; i < 10; i++) {
+    uint16_t index;
+    UTI_GetRandomBytesUrandom(&index, sizeof (index));
+    index %= 8 * sizeof (our_own_ref_id.filter);
+    our_own_ref_id.filter[index / 8] |= 1 << (index % 8);
+  }
+
   /* Now see if we can get the drift file opened */
   drift_file = CNF_GetDriftFile(&drift_file_interval);
   if (drift_file) {
@@ -338,6 +348,59 @@ REF_LeapMode
 REF_GetLeapMode(void)
 {
   return leap_mode;
+}
+
+/* ================================================== */
+
+void
+REF_ZeroReferenceIds(REF_ReferenceIds *ref_ids)
+{
+  memset(ref_ids->filter, 0, sizeof (ref_ids->filter));
+}
+
+
+/* ================================================== */
+
+void
+REF_UpdateReferenceIds(REF_ReferenceIds *ref_ids, uint8_t *fragment, int offset, int length)
+{
+  BRIEF_ASSERT(offset >= 0 && length >= 0 &&
+               offset + length <= sizeof (ref_ids->filter));
+  memcpy(ref_ids->filter + offset, fragment, length);
+}
+
+/* ================================================== */
+
+void
+REF_AddReferenceIds(REF_ReferenceIds *src, REF_ReferenceIds *dest)
+{
+  int i;
+
+  for (i = 0; i < sizeof (dest->filter); i++)
+    dest->filter[i] |= src->filter[i];
+}
+
+/* ================================================== */
+
+int
+REF_CheckReferenceIds(REF_ReferenceIds *ref_ids)
+{
+  int i;
+
+  for (i = 0; i < sizeof (ref_ids->filter); i++) {
+    if ((our_own_ref_id.filter[i] & ref_ids->filter[i]) != our_own_ref_id.filter[i])
+      return 1;
+  }
+
+  return 0;
+}
+
+/* ================================================== */
+
+REF_ReferenceIds *
+REF_GetReferenceIds(void)
+{
+  return &our_ref_ids;
 }
 
 /* ================================================== */
@@ -910,7 +973,8 @@ get_correction_rate(double offset_sd, double update_interval)
 
 void
 REF_SetReference(int stratum, NTP_Leap leap, int combined_sources,
-                 uint32_t ref_id, IPAddr *ref_ip, struct timespec *ref_time,
+                 uint32_t ref_id, REF_ReferenceIds *ref_ids,
+                 IPAddr *ref_ip, struct timespec *ref_time,
                  double offset, double offset_sd,
                  double frequency, double frequency_sd, double skew,
                  double root_delay, double root_dispersion)
@@ -957,6 +1021,10 @@ REF_SetReference(int stratum, NTP_Leap leap, int combined_sources,
   are_we_synchronised = leap != LEAP_Unsynchronised;
   our_stratum = stratum + 1;
   our_ref_id = ref_id;
+  if (ref_ids) {
+    our_ref_ids = our_own_ref_id;
+    REF_AddReferenceIds(ref_ids, &our_ref_ids);
+  }
   if (ref_ip)
     our_ref_ip = *ref_ip;
   else
@@ -1068,7 +1136,7 @@ REF_SetManualReference
   /* We are not synchronised to an external source, as such.  This is
      only supposed to be used with the local source option, really.
      Log as MANU in the tracking log, packets will have NTP_REFID_LOCAL. */
-  REF_SetReference(0, LEAP_Unsynchronised, 1, 0x4D414E55UL, NULL,
+  REF_SetReference(0, LEAP_Unsynchronised, 1, 0x4D414E55UL, NULL, NULL,
                    ref_time, offset, 0.0, frequency, skew, skew, 0.0, 0.0);
 }
 
@@ -1098,6 +1166,7 @@ REF_SetUnsynchronised(void)
   }
 
   update_leap_status(LEAP_Unsynchronised, 0, 0);
+  our_ref_ids = our_own_ref_id;
   our_ref_ip.family = IPADDR_INET4;
   our_ref_ip.addr.in4 = 0;
   our_stratum = 0;

@@ -72,6 +72,24 @@ extern void REF_SetModeEndHandler(REF_ModeEndHandler handler);
 /* Get leap second handling mode */
 extern REF_LeapMode REF_GetLeapMode(void);
 
+typedef struct {
+  uint8_t filter[NTP_BLOOM_FILTER_LENGTH];
+} REF_ReferenceIds;
+
+extern void REF_ZeroReferenceIds(REF_ReferenceIds *ref_ids);
+
+extern void REF_UpdateReferenceIds(REF_ReferenceIds *ref_ids, uint8_t *fragment,
+                                   int offset, int length);
+
+extern void REF_AddReferenceIds(REF_ReferenceIds *src, REF_ReferenceIds *dest);
+
+/* Check if our reference ID is not present in a provided set of reference IDs,
+   i.e. there is no synchronization loop present (false positives are possible
+   due to the use of Bloom filter) */
+extern int REF_CheckReferenceIds(REF_ReferenceIds *ref_ids);
+
+extern REF_ReferenceIds *REF_GetReferenceIds(void);
+
 /* Function which takes a local cooked time and returns the estimated
    time of the reference.  It also returns the other parameters
    required for forming the outgoing NTP packet.
@@ -86,7 +104,10 @@ extern REF_LeapMode REF_GetLeapMode(void);
    stratum is the stratum of this machine, when considered to be sync'd to the
    reference
    
-   ref_id is the reference_id of the source
+   v4_ref_id is the NTPv4 reference_id of the source
+
+   v5_ref_ids is the NTPv5 Bloom filter containing reference IDs of all sources
+   up to the chain up to the primary time sources
 
    ref_time is the time at which the we last set the reference source up
 
@@ -139,6 +160,7 @@ extern void REF_SetReference
  NTP_Leap leap,
  int combined_sources,
  uint32_t ref_id,
+ REF_ReferenceIds *ref_ids,
  IPAddr *ref_ip,
  struct timespec *ref_time,
  double offset,
