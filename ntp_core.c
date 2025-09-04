@@ -210,6 +210,9 @@ struct NCR_Instance_Record {
   int last_refids_fragment;
   int requested_refids_fragment;
 
+  /* Flag indicating all fragments were received at least once */
+  int completed_refids;
+
   /* The instance record in the main source management module.  This
      performs the statistical analysis on the samples we generate */
 
@@ -831,6 +834,7 @@ NCR_ResetInstance(NCR_Instance instance)
 
   instance->last_refids_fragment = -1;
   instance->requested_refids_fragment = -1;
+  instance->completed_refids = 0;
 
   if (instance->delay_quant)
     QNT_Reset(instance->delay_quant);
@@ -2007,7 +2011,8 @@ check_delay_dev_ratio(NCR_Instance inst, SST_Stats stats,
 
 static int
 check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_PacketInfo *info,
-                NTP_Local_Address *local_addr, struct timespec *local_ts)
+                NTP_Local_Address *local_addr, uint8_t *ef_ref_ids, int ef_ref_ids_len,
+                struct timespec *local_ts)
 {
   double our_root_delay, our_root_dispersion;
   int are_we_synchronised, our_stratum;
@@ -2019,15 +2024,32 @@ check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_PacketInfo *info,
   if (!NIO_IsServerSocketOpen() || REF_GetMode() != REF_ModeNormal)
     return 1;
 
+  /* With NTPv5, check only the reference IDs Bloom filter */
+  if (info->version == 5) {
+    REF_ReferenceIds ref_ids;
+
+    /* TODO: refactor to avoid looking ahead */
+    if (!inst->completed_refids &&
+        !(inst->requested_refids_fragment + 1 == REFIDS_FRAGMENTS &&
+          ef_ref_ids && ef_ref_ids_len == REFIDS_FRAGMENT_LENGTH))
+      return 0;
+
+    ref_ids = *SRC_GetReferenceIds(inst->source);
+
+    if (ef_ref_ids && ef_ref_ids_len == REFIDS_FRAGMENT_LENGTH) {
+      REF_UpdateReferenceIds(&ref_ids, ef_ref_ids,
+                             inst->requested_refids_fragment * REFIDS_FRAGMENT_LENGTH,
+                             REFIDS_FRAGMENT_LENGTH);
+    }
+
+    return REF_CheckReferenceIds(&ref_ids);
+  }
+
   /* Check if the source indicates that it is synchronised to our address
      (assuming it uses the same address as the one from which we send requests
      to the source) */
-  if (message->stratum > 1 &&
-      ((info->version <= 4 &&
-        message->v4.reference_id == htonl(UTI_IPToRefid(&local_addr->ip_addr))) ||
-       (info->version == 5 &&
-        /* TODO use the latest fragment from this response */
-        !REF_CheckReferenceIds(SRC_GetReferenceIds(inst->source)))))
+  if (message->stratum > 1 && info->version <= 4 &&
+      message->v4.reference_id == htonl(UTI_IPToRefid(&local_addr->ip_addr)))
     return 0;
 
   /* Compare our reference data with the source to make sure it is not us
@@ -2490,7 +2512,8 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
 
     /* Test D requires that the source is not synchronised to us and is not us
        to prevent a synchronisation loop */
-    testD = check_sync_loop(inst, message, info, local_addr, &rx_ts->ts);
+    testD = check_sync_loop(inst, message, info, local_addr, ef_reference_ids,
+                            ef_reference_ids_length, &rx_ts->ts);
   } else {
     remote_interval = local_interval = response_time = 0.0;
     sample.offset = sample.peer_delay = sample.peer_dispersion = 0.0;
@@ -2617,6 +2640,8 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
                              inst->requested_refids_fragment * REFIDS_FRAGMENT_LENGTH,
                              REFIDS_FRAGMENT_LENGTH);
       inst->last_refids_fragment = inst->requested_refids_fragment;
+      if (inst->last_refids_fragment + 1 == REFIDS_FRAGMENTS)
+        inst->completed_refids = 1;
     }
 
     SRC_UpdateReachability(inst->source, synced_packet);
