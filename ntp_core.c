@@ -206,6 +206,10 @@ struct NCR_Instance_Record {
   NTP_int64 init_remote_ntp_tx;
   NTP_Local_Timestamp init_local_rx;
 
+  /* Last updated and currently requested fragment of NTPv5 reference IDs */
+  int last_refids_fragment;
+  int requested_refids_fragment;
+
   /* The instance record in the main source management module.  This
      performs the statistical analysis on the samples we generate */
 
@@ -314,6 +318,13 @@ static ARR_Instance broadcasts;
 /* Maximum ratio of local intervals in the timestamp selection of the
    interleaved mode to prefer a sample using previous timestamps */
 #define MAX_INTERLEAVED_L2L_RATIO 0.1
+
+/* Number of requests and responses needed to get a whole NTPv5
+   reference IDs Bloom filter */
+#define REFIDS_FRAGMENTS 4
+
+/* Length of a single reference IDs fragment */
+#define REFIDS_FRAGMENT_LENGTH (NTP_BLOOM_FILTER_LENGTH / REFIDS_FRAGMENTS)
 
 /* Maximum acceptable change in server mono<->real offset */
 #define MAX_MONO_DOFFSET 16.0
@@ -818,6 +829,9 @@ NCR_ResetInstance(NCR_Instance instance)
   UTI_ZeroNtp64(&instance->init_remote_ntp_tx);
   zero_local_timestamp(&instance->init_local_rx);
 
+  instance->last_refids_fragment = -1;
+  instance->requested_refids_fragment = -1;
+
   if (instance->delay_quant)
     QNT_Reset(instance->delay_quant);
   if (instance->filter)
@@ -1223,6 +1237,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                 int version, /* The NTP version to be set in the packet */
                 uint32_t kod, /* KoD code - 0 disabled */
                 int ext_field_flags, /* Extension fields to be included in the packet */
+                int refids_fragment, /* The requested fragment of NTPv5 reference IDs */
                 NAU_Instance auth, /* The authentication to be used for the packet */
                 NTP_int64 *remote_ntp_cookie, /* The server cookie from received packet */
                 NTP_int64 *remote_ntp_rx, /* The receive timestamp from received packet */
@@ -1412,8 +1427,8 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
   if (version == 5) {
     if (ext_field_flags & NTP_EF_FLAG_REFERENCE_IDS) {
       if (my_mode == MODE_CLIENT) {
-        /* TODO use smaller fragments */
-        if (!add_ef_reference_ids_req(&message, &info, 0, NTP_BLOOM_FILTER_LENGTH))
+        if (!add_ef_reference_ids_req(&message, &info, refids_fragment *
+                                      REFIDS_FRAGMENT_LENGTH, REFIDS_FRAGMENT_LENGTH))
           return 0;
       } else {
         if (!add_ef_reference_ids_resp(&message, &info, request_info->ef_ref_ids.offset,
@@ -1625,9 +1640,15 @@ transmit_timeout(void *arg)
     inst->presend_done--;
   }
 
+  if (inst->version == 5) {
+    /* TODO: don't request anything if not accepting client requests? */
+    /* TODO: randomize the order after some number of requests? */
+    inst->requested_refids_fragment = (inst->last_refids_fragment + 1) % REFIDS_FRAGMENTS;
+  }
+
   /* Send the request (which may also be a response in the symmetric mode) */
   sent = transmit_packet(inst->mode, interleaved, inst->local_poll, inst->version, 0,
-                         inst->ext_field_flags, inst->auth,
+                         inst->ext_field_flags, inst->requested_refids_fragment, inst->auth,
                          initial ? NULL : &inst->remote_ntp_cookie,
                          initial ? NULL : &inst->remote_ntp_rx,
                          initial ? &inst->init_remote_ntp_tx : &inst->remote_ntp_tx,
@@ -2591,8 +2612,12 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
     inst->prev_tx_count = inst->tx_count;
     inst->tx_count = 0;
 
-    if (ef_reference_ids && ef_reference_ids_length == NTP_BLOOM_FILTER_LENGTH)
-      SRC_UpdateReferenceIds(inst->source, ef_reference_ids, 0, ef_reference_ids_length);
+    if (ef_reference_ids && ef_reference_ids_length == REFIDS_FRAGMENT_LENGTH) {
+      SRC_UpdateReferenceIds(inst->source, ef_reference_ids,
+                             inst->requested_refids_fragment * REFIDS_FRAGMENT_LENGTH,
+                             REFIDS_FRAGMENT_LENGTH);
+      inst->last_refids_fragment = inst->requested_refids_fragment;
+    }
 
     SRC_UpdateReachability(inst->source, synced_packet);
 
@@ -2996,7 +3021,7 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
     poll = MAX(poll, message->poll);
 
   /* Send a reply */
-  if (!transmit_packet(my_mode, interleaved, poll, version, kod, info.ext_field_flags, NULL,
+  if (!transmit_packet(my_mode, interleaved, poll, version, kod, info.ext_field_flags, 0, NULL,
                        NULL, &message->receive_ts, &message->transmit_ts,
                        rx_ts, tx_ts, local_ntp_rx, NULL, remote_addr, local_addr,
                        message, &info))
@@ -3503,7 +3528,7 @@ broadcast_timeout(void *arg)
   UTI_ZeroNtp64(&orig_ts);
   zero_local_timestamp(&recv_ts);
 
-  transmit_packet(MODE_BROADCAST, 0, poll, 4, 0, 0, destination->auth,
+  transmit_packet(MODE_BROADCAST, 0, poll, 4, 0, 0, 0, destination->auth,
                   NULL, &orig_ts, &orig_ts, &recv_ts, NULL, NULL, NULL,
                   &destination->addr, &destination->local_addr, NULL, NULL);
 
