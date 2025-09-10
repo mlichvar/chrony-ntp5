@@ -392,11 +392,11 @@ do_size_checks(void)
   assert(offsetof(NTP_Packet, v4.reference_id) == 12);
   assert(offsetof(NTP_Packet, v4.reference_ts) == 16);
   assert(offsetof(NTP_Packet, v4.originate_ts) == 24);
-  assert(offsetof(NTP_Packet, v5.timescale)    ==  4);
-  assert(offsetof(NTP_Packet, v5.era)          ==  5);
-  assert(offsetof(NTP_Packet, v5.flags)        ==  6);
-  assert(offsetof(NTP_Packet, v5.root_delay)   ==  8);
-  assert(offsetof(NTP_Packet, v5.root_dispersion) == 12);
+  assert(offsetof(NTP_Packet, v5.root_delay)   ==  4);
+  assert(offsetof(NTP_Packet, v5.root_dispersion) == 8);
+  assert(offsetof(NTP_Packet, v5.timescale)    ==  12);
+  assert(offsetof(NTP_Packet, v5.era)          ==  13);
+  assert(offsetof(NTP_Packet, v5.flags)        ==  14);
   assert(offsetof(NTP_Packet, v5.server_cookie) == 16);
   assert(offsetof(NTP_Packet, v5.client_cookie) == 24);
   assert(offsetof(NTP_Packet, receive_ts)      == 32);

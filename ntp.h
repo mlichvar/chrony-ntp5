@@ -109,11 +109,11 @@ typedef struct {
       NTP_int64 originate_ts;
     } v4;
     struct {
+      NTP_int32 root_delay;
+      NTP_int32 root_dispersion;
       uint8_t timescale;
       uint8_t era;
       uint16_t flags;
-      NTP_int32 root_delay;
-      NTP_int32 root_dispersion;
       NTP_int64 server_cookie;
       NTP_int64 client_cookie;
     } v5;
@@ -172,7 +172,7 @@ typedef struct {
 
 #define NTP_EF_EXP_MONO_ROOT_MAGIC      0xF5BEDD9AU
 
-#define NTP_EF_DRAFT_ID_STRING          "draft-ietf-ntp-ntpv5-05"
+#define NTP_EF_DRAFT_ID_STRING          "draft-ietf-ntp-ntpv5-06"
 
 /* Authentication extension fields */
 
