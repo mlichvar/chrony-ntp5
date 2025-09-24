@@ -142,6 +142,9 @@ typedef struct {
 /* Length of the NTPv5 bloom filter containing reference IDs */
 #define NTP_BLOOM_FILTER_LENGTH (4096 / 8)
 
+/* Magic reference timestamp indicating NTPv5 support */
+#define NTP_MAGIC_V5_REFERENCE_TS "NTP5DRFT"
+
 /* Non-authentication extension fields and corresponding internal flags */
 
 #define NTP_EF_NET_CORRECTION           0x010A

@@ -127,6 +127,7 @@ struct NCR_Instance_Record {
   int poll_target;              /* Target number of sourcestats samples */
 
   int version;                  /* Version set in packets for server/peer */
+  int v5_negotiation;           /* Flag enabling NTPv5 negotiation */
 
   double poll_score;            /* Score of current local poll */
 
@@ -707,8 +708,12 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
       result->version = 4;
   }
 
+  result->v5_negotiation = 0;
+
   if (params->version)
     result->version = CLAMP(NTP_MIN_COMPAT_VERSION, params->version, NTP_VERSION);
+  else if (result->version == 4)
+    result->v5_negotiation = 1;
 
   /* Request reference IDs if using NTPv5 */
   result->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
@@ -1382,7 +1387,15 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
       UTI_ZeroNtp64(&message.transmit_ts);
     }
   } else {
-    UTI_TimespecToNtp64(&our_ref_time, &message.v4.reference_ts, NULL);
+    /* TODO: in client follow inst->v5_negotiation */
+    if (my_mode == MODE_CLIENT ||
+        (my_mode == MODE_SERVER && request &&
+         memcmp(&request->v4.reference_ts, NTP_MAGIC_V5_REFERENCE_TS,
+                sizeof (request->v4.reference_ts)) == 0))
+      memcpy(&message.v4.reference_ts, NTP_MAGIC_V5_REFERENCE_TS,
+             sizeof (message.v4.reference_ts));
+    else
+      UTI_TimespecToNtp64(&our_ref_time, &message.v4.reference_ts, NULL);
     ntp_orig = &message.v4.originate_ts;
     ntp_rx = &message.receive_ts;
     ntp_tx = &message.transmit_ts;
@@ -2646,6 +2659,14 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
       inst->last_refids_fragment = inst->requested_refids_fragment;
       if (inst->last_refids_fragment + 1 == REFIDS_FRAGMENTS)
         inst->completed_refids = 1;
+    }
+
+    if (info->version < 5 && inst->v5_negotiation &&
+        memcmp(&message->v4.reference_ts, NTP_MAGIC_V5_REFERENCE_TS,
+               sizeof (message->v4.reference_ts)) == 0) {
+      /* TODO: fall back to v4 when unreachable */
+      DEBUG_LOG("Switching to NTPv5");
+      inst->version = 5;
     }
 
     SRC_UpdateReachability(inst->source, synced_packet);
