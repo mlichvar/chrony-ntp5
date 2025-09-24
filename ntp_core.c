@@ -710,8 +710,8 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
   if (params->version)
     result->version = CLAMP(NTP_MIN_COMPAT_VERSION, params->version, NTP_VERSION);
 
-  if (result->version == 5)
-    result->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
+  /* Request reference IDs if using NTPv5 */
+  result->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
 
   /* TODO: make sure mode is client if version == 5 */
 
