@@ -2262,11 +2262,13 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
   }
 
   pkt_leap = NTP_LVM_TO_LEAP(message->lvm);
-  if (info->version == 5 && message->v5.flags & !htons(NTP_FLAG_SYNCHRONISED))
-    pkt_leap = LEAP_Unsynchronised;
-
   pkt_version = NTP_LVM_TO_VERSION(message->lvm);
   pkt_refid = ntohl(message->v4.reference_id);
+
+  if (info->version == 5) {
+    if (message->v5.flags & !htons(NTP_FLAG_SYNCHRONISED))
+      pkt_leap = LEAP_Unsynchronised;
+  }
 
   if (ef_mono_root) {
     pkt_root_delay = UTI_Ntp32f28ToDouble(ef_mono_root->root_delay);
