@@ -2263,11 +2263,13 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
 
   pkt_leap = NTP_LVM_TO_LEAP(message->lvm);
   pkt_version = NTP_LVM_TO_VERSION(message->lvm);
-  pkt_refid = ntohl(message->v4.reference_id);
 
   if (info->version == 5) {
     if (message->v5.flags & !htons(NTP_FLAG_SYNCHRONISED))
       pkt_leap = LEAP_Unsynchronised;
+    pkt_refid = 0;
+  } else {
+    pkt_refid = ntohl(message->v4.reference_id);
   }
 
   if (ef_mono_root) {
