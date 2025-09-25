@@ -337,36 +337,44 @@ helper_signal(int x)
 /* ================================================== */
 
 static int
-prepare_response(NKSN_Instance session, int error, int next_protocol, int aead_algorithm,
+prepare_response(NKSN_Instance session, int error, int next_protocols, int aead_algorithm,
                  int compliant_128gcm)
 {
   SIV_Algorithm exporter_algorithm;
+  uint16_t datum, np_record[2];
+  int i, np_record_length;
   NKE_Context context;
   NKE_Cookie cookie;
   char *ntp_server;
-  uint16_t datum;
-  int i;
 
-  DEBUG_LOG("NTS KE response: error=%d next=%d aead=%d", error, next_protocol, aead_algorithm);
+  DEBUG_LOG("NTS KE response: error=%d next=%x aead=%d",
+            error, (unsigned int)next_protocols, aead_algorithm);
 
   NKSN_BeginMessage(session);
+
+  np_record_length = 0;
+  if (next_protocols & NKE_FLAG_NEXT_PROTOCOL_NTPV4)
+    np_record[np_record_length++] = htons(NKE_NEXT_PROTOCOL_NTPV4);
+  if (next_protocols & NKE_FLAG_NEXT_PROTOCOL_NTPV5)
+    np_record[np_record_length++] = htons(NKE_NEXT_PROTOCOL_NTPV5);
 
   if (error >= 0) {
     datum = htons(error);
     if (!NKSN_AddRecord(session, 1, NKE_RECORD_ERROR, &datum, sizeof (datum)))
       return 0;
-  } else if (next_protocol < 0) {
+  } else if (np_record_length == 0) {
     if (!NKSN_AddRecord(session, 1, NKE_RECORD_NEXT_PROTOCOL, NULL, 0))
       return 0;
   } else if (aead_algorithm < 0) {
-    datum = htons(next_protocol);
-    if (!NKSN_AddRecord(session, 1, NKE_RECORD_NEXT_PROTOCOL, &datum, sizeof (datum)))
+    if (!NKSN_AddRecord(session, 1, NKE_RECORD_NEXT_PROTOCOL, np_record,
+                        np_record_length * sizeof (np_record[0])))
       return 0;
+
     if (!NKSN_AddRecord(session, 1, NKE_RECORD_AEAD_ALGORITHM, NULL, 0))
       return 0;
   } else {
-    datum = htons(next_protocol);
-    if (!NKSN_AddRecord(session, 1, NKE_RECORD_NEXT_PROTOCOL, &datum, sizeof (datum)))
+    if (!NKSN_AddRecord(session, 1, NKE_RECORD_NEXT_PROTOCOL, np_record,
+                        np_record_length * sizeof (np_record[0])))
       return 0;
 
     datum = htons(aead_algorithm);
@@ -425,7 +433,7 @@ process_request(NKSN_Instance session)
 {
   int next_protocol_records = 0, aead_algorithm_records = 0;
   int next_protocol_values = 0, aead_algorithm_values = 0;
-  int next_protocol = -1, aead_algorithm = -1, error = -1;
+  int next_protocols = 0, aead_algorithm = -1, error = -1;
   int i, j, critical, type, length;
   int compliant_128gcm = 0;
   uint16_t data[NKE_MAX_RECORD_BODY_LENGTH / sizeof (uint16_t)];
@@ -448,8 +456,14 @@ process_request(NKSN_Instance session)
 
         for (i = 0; i < MIN(length, sizeof (data)) / 2; i++) {
           next_protocol_values++;
-          if (ntohs(data[i]) == NKE_NEXT_PROTOCOL_NTPV4)
-            next_protocol = NKE_NEXT_PROTOCOL_NTPV4;
+          switch (ntohs(data[i])) {
+            case NKE_NEXT_PROTOCOL_NTPV4:
+              next_protocols |= NKE_FLAG_NEXT_PROTOCOL_NTPV4;
+              break;
+            case NKE_NEXT_PROTOCOL_NTPV5:
+              next_protocols |= NKE_FLAG_NEXT_PROTOCOL_NTPV5;
+              break;
+          }
         }
         break;
       case NKE_RECORD_AEAD_ALGORITHM:
@@ -490,12 +504,12 @@ process_request(NKSN_Instance session)
 
   if (error < 0) {
     if (next_protocol_records != 1 || next_protocol_values < 1 ||
-        (next_protocol == NKE_NEXT_PROTOCOL_NTPV4 &&
+        (next_protocols & (NKE_FLAG_NEXT_PROTOCOL_NTPV4 | NKE_FLAG_NEXT_PROTOCOL_NTPV5) &&
          (aead_algorithm_records != 1 || aead_algorithm_values < 1)))
       error = NKE_ERROR_BAD_REQUEST;
   }
 
-  if (!prepare_response(session, error, next_protocol, aead_algorithm, compliant_128gcm))
+  if (!prepare_response(session, error, next_protocols, aead_algorithm, compliant_128gcm))
     return 0;
 
   return 1;

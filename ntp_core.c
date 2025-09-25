@@ -127,7 +127,8 @@ struct NCR_Instance_Record {
   int poll_target;              /* Target number of sourcestats samples */
 
   int version;                  /* Version set in packets for server/peer */
-  int v5_negotiation;           /* Flag enabling NTPv5 negotiation */
+  int v5_negotiation;           /* Flag enabling NTPv5 negotiation over NTP */
+  int v5_auth_negotiation;      /* Flag indicating version is set by auth */
 
   double poll_score;            /* Score of current local poll */
 
@@ -683,6 +684,14 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
   result->poll_target = MAX(1, params->poll_target);
   result->ext_field_flags = params->ext_fields;
 
+  if (params->version != 0) {
+    result->version = CLAMP(NTP_MIN_COMPAT_VERSION, params->version, NTP_VERSION);
+  } else {
+    result->version = 0;
+  }
+  result->v5_negotiation = 0;
+  result->v5_auth_negotiation = 0;
+
   if (params->nts) {
     IPSockAddr nts_address;
 
@@ -693,27 +702,25 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
     nts_address.port = params->nts_port;
 
     result->auth = NAU_CreateNtsInstance(&nts_address, name, params->cert_set,
-                                         result->remote_addr.port);
+                                         result->remote_addr.port,
+                                         params->version == 4 || params->version == 0,
+                                         params->version == 5 || params->version == 0);
+    if (result->version == 0)
+      result->v5_auth_negotiation = 1;
   } else if (params->authkey != INACTIVE_AUTHKEY) {
     result->auth = NAU_CreateSymmetricInstance(params->authkey);
+    if (result->version == 0) {
+      result->version = NAU_GetSuggestedNtpVersion(result->auth);
+      if (result->version == 5)
+        result->version = 4;
+    }
   } else {
     result->auth = NAU_CreateNoneInstance();
-  }
-
-  if (result->ext_field_flags || result->interleaved)
-    result->version = 4;
-  else {
-    result->version = NAU_GetSuggestedNtpVersion(result->auth);
-    if (result->version == 5)
+    if (result->version == 0) {
       result->version = 4;
+      result->v5_negotiation = 1;
+    }
   }
-
-  result->v5_negotiation = 0;
-
-  if (params->version)
-    result->version = CLAMP(NTP_MIN_COMPAT_VERSION, params->version, NTP_VERSION);
-  else if (result->version == 4)
-    result->v5_negotiation = 1;
 
   /* Request reference IDs if using NTPv5 */
   result->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
@@ -1657,6 +1664,9 @@ transmit_timeout(void *arg)
   } else if (inst->presend_done > 0) {
     inst->presend_done--;
   }
+
+  if (inst->v5_auth_negotiation)
+    inst->version = NAU_GetSuggestedNtpVersion(inst->auth);
 
   if (inst->version == 5) {
     /* TODO: don't request anything if not accepting client requests? */

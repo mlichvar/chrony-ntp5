@@ -61,6 +61,8 @@ struct NNC_Instance_Record {
   uint32_t cert_set;
   /* Configured NTP port */
   uint16_t default_ntp_port;
+  /* Requested NTS-KE next protocols */
+  int req_next_protocols;
   /* Address of NTP server (can be negotiated in NTS-KE) */
   IPSockAddr ntp_address;
 
@@ -71,6 +73,7 @@ struct NNC_Instance_Record {
   double next_nke_attempt;
   double last_nke_success;
 
+  int resp_next_protocols;
   NKE_Context context;
   NKE_Context alt_context;
   unsigned int context_id;
@@ -105,6 +108,7 @@ reset_instance(NNC_Instance inst)
   inst->next_nke_attempt = 0.0;
   inst->last_nke_success = 0.0;
 
+  inst->resp_next_protocols = 0;
   memset(&inst->context, 0, sizeof (inst->context));
   memset(&inst->alt_context, 0, sizeof (inst->alt_context));
   inst->context_id = 0;
@@ -121,7 +125,8 @@ reset_instance(NNC_Instance inst)
 /* ================================================== */
 
 NNC_Instance
-NNC_CreateInstance(IPSockAddr *nts_address, const char *name, uint32_t cert_set, uint16_t ntp_port)
+NNC_CreateInstance(IPSockAddr *nts_address, const char *name, uint32_t cert_set, uint16_t ntp_port,
+                   int ntpv4, int ntpv5)
 {
   NNC_Instance inst;
 
@@ -131,6 +136,8 @@ NNC_CreateInstance(IPSockAddr *nts_address, const char *name, uint32_t cert_set,
   inst->name = Strdup(name);
   inst->cert_set = cert_set;
   inst->default_ntp_port = ntp_port;
+  inst->req_next_protocols = (ntpv4 ? NKE_FLAG_NEXT_PROTOCOL_NTPV4 : 0) |
+                             (ntpv5 ? NKE_FLAG_NEXT_PROTOCOL_NTPV5 : 0);
   inst->ntp_address.ip_addr = nts_address->ip_addr;
   inst->ntp_address.port = ntp_port;
   inst->siv = NULL;
@@ -261,7 +268,8 @@ get_cookies(NNC_Instance inst)
       return 0;
     }
 
-    inst->nke = NKC_CreateInstance(&inst->nts_address, inst->name, inst->cert_set);
+    inst->nke = NKC_CreateInstance(&inst->nts_address, inst->name, inst->cert_set,
+                                   inst->req_next_protocols);
 
     inst->nke_attempts++;
 
@@ -278,7 +286,8 @@ get_cookies(NNC_Instance inst)
   assert(sizeof (inst->cookies) / sizeof (inst->cookies[0]) == NTS_MAX_COOKIES);
 
   /* Get the new keys, cookies and NTP address if the session was successful */
-  got_data = NKC_GetNtsData(inst->nke, &inst->context, &inst->alt_context,
+  got_data = NKC_GetNtsData(inst->nke, &inst->resp_next_protocols,
+                            &inst->context, &inst->alt_context,
                             inst->cookies, &inst->num_cookies, NTS_MAX_COOKIES,
                             &ntp_address);
 
@@ -339,6 +348,20 @@ NNC_PrepareForAuth(NNC_Instance inst)
   inst->auth_ready = 1;
 
   return 1;
+}
+
+/* ================================================== */
+
+int
+NNC_GetSuggestedNtpVersion(NNC_Instance inst)
+{
+  if (!inst->auth_ready)
+    return 0;
+  if (inst->resp_next_protocols & NKE_FLAG_NEXT_PROTOCOL_NTPV5)
+    return 5;
+  if (inst->resp_next_protocols & NKE_FLAG_NEXT_PROTOCOL_NTPV4)
+    return 4;
+  return 0;
 }
 
 /* ================================================== */

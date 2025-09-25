@@ -148,11 +148,11 @@ NAU_CreateSymmetricInstance(uint32_t key_id)
 
 NAU_Instance
 NAU_CreateNtsInstance(IPSockAddr *nts_address, const char *name, uint32_t cert_set,
-                      uint16_t ntp_port)
+                      uint16_t ntp_port, int ntpv4, int ntpv5)
 {
   NAU_Instance instance = create_instance(NTP_AUTH_NTS);
 
-  instance->nts = NNC_CreateInstance(nts_address, name, cert_set, ntp_port);
+  instance->nts = NNC_CreateInstance(nts_address, name, cert_set, ntp_port, ntpv4, ntpv5);
 
   return instance;
 }
@@ -180,11 +180,18 @@ NAU_IsAuthEnabled(NAU_Instance instance)
 int
 NAU_GetSuggestedNtpVersion(NAU_Instance instance)
 {
-  /* If the MAC in NTPv4 packets would be truncated, prefer NTPv3 for
-     compatibility with older chronyd servers */
-  if (instance->mode == NTP_AUTH_SYMMETRIC &&
-      KEY_GetAuthLength(instance->key_id) + sizeof (instance->key_id) > NTP_MAX_V4_MAC_LENGTH)
-    return 3;
+  switch (instance->mode) {
+    case NTP_AUTH_SYMMETRIC:
+      /* If the MAC in NTPv4 packets would be truncated, prefer NTPv3 for
+         compatibility with older chronyd servers */
+      if (instance->mode == NTP_AUTH_SYMMETRIC &&
+          KEY_GetAuthLength(instance->key_id) + sizeof (instance->key_id) > NTP_MAX_V4_MAC_LENGTH)
+        return 3;
+      break;
+    case NTP_AUTH_NTS:
+      return NNC_GetSuggestedNtpVersion(instance->nts);
+    default:
+  }
 
   return NTP_VERSION;
 }

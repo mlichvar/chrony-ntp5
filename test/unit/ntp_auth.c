@@ -169,9 +169,9 @@ test_unit(void)
         can_auth_res = can_auth_req;
         break;
       case 2:
-        inst = NAU_CreateNtsInstance(&nts_addr, "test", 0, 0);
+        inst = NAU_CreateNtsInstance(&nts_addr, "test", 0, 0, 1, 0);
         TEST_CHECK(NAU_IsAuthEnabled(inst));
-        TEST_CHECK(NAU_GetSuggestedNtpVersion(inst) == 5);
+        TEST_CHECK(NAU_GetSuggestedNtpVersion(inst) == 0);
         mode = NTP_AUTH_NTS;
         can_auth_req = 0;
         can_auth_res = 0;

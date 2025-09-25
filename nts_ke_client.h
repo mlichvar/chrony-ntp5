@@ -33,7 +33,8 @@
 typedef struct NKC_Instance_Record *NKC_Instance;
 
 /* Create a client NTS-KE instance */
-extern NKC_Instance NKC_CreateInstance(IPSockAddr *address, const char *name, uint32_t cert_set);
+extern NKC_Instance NKC_CreateInstance(IPSockAddr *address, const char *name, uint32_t cert_set,
+                                       int next_protocols);
 
 /* Destroy an instance */
 extern void NKC_DestroyInstance(NKC_Instance inst);
@@ -46,7 +47,8 @@ extern int NKC_Start(NKC_Instance inst);
 extern int NKC_IsActive(NKC_Instance inst);
 
 /* Get the NTS data if the session was successful */
-extern int NKC_GetNtsData(NKC_Instance inst, NKE_Context *context, NKE_Context *alt_context,
+extern int NKC_GetNtsData(NKC_Instance inst, int *next_protocols,
+                          NKE_Context *context, NKE_Context *alt_context,
                           NKE_Cookie *cookies, int *num_cookies, int max_cookies,
                           IPSockAddr *ntp_address);
 

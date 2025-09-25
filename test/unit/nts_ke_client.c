@@ -129,9 +129,9 @@ prepare_response(NKSN_Instance session, int valid)
 void
 test_unit(void)
 {
+  int i, j, r, valid, num_cookies, next_protocols;
   NKE_Context context, alt_context;
   NKE_Cookie cookies[MAX_COOKIES];
-  int i, j, r, valid, num_cookies;
   NKC_Instance inst;
   IPSockAddr addr;
 
@@ -148,7 +148,7 @@ test_unit(void)
   SCK_GetLoopbackIPAddress(AF_INET, &addr.ip_addr);
   addr.port = 0;
 
-  inst = NKC_CreateInstance(&addr, "test", 0);
+  inst = NKC_CreateInstance(&addr, "test", 0, NKE_NEXT_PROTOCOL_NTPV4);
   TEST_CHECK(inst);
 
   for (i = 0; i < 10000; i++) {
@@ -162,7 +162,7 @@ test_unit(void)
     memset(&alt_context, 0, sizeof (alt_context));
     num_cookies = 0;
 
-    r = NKC_GetNtsData(inst, &context, &alt_context,
+    r = NKC_GetNtsData(inst, &next_protocols, &context, &alt_context,
                        cookies, &num_cookies, random() % MAX_COOKIES + 1, &addr);
     TEST_CHECK(r == valid);
     if (r) {
