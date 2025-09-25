@@ -197,7 +197,7 @@ NNS_GenerateResponseAuth(NTP_Packet *request, NTP_PacketInfo *req_info,
 
 NNC_Instance
 NNC_CreateInstance(IPSockAddr *nts_address, const char *name, uint32_t cert_set,
-                   uint16_t ntp_port, int max_retry_interval2)
+                   uint16_t ntp_port, int ntpv4, int ntpv5, int max_retry_interval2)
 {
   return NULL;
 }
@@ -211,6 +211,12 @@ int
 NNC_PrepareForAuth(NNC_Instance inst)
 {
   return 1;
+}
+
+int
+NNC_GetSuggestedNtpVersion(NNC_Instance inst)
+{
+  return 0;
 }
 
 int

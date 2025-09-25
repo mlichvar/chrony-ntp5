@@ -43,6 +43,7 @@
 
 struct NKC_Instance_Record {
   char *name;
+  int req_next_protocols;
   IPSockAddr address;
   NKSN_Credentials credentials;
   NKSN_Instance session;
@@ -50,6 +51,7 @@ struct NKC_Instance_Record {
   int got_response;
   int resolving_name;
 
+  int resp_next_protocols;
   int compliant_128gcm;
   NKE_Context context;
   NKE_Context alt_context;
@@ -101,18 +103,23 @@ name_resolve_handler(DNS_Status status, int n_addrs, IPAddr *ip_addrs, void *arg
 /* ================================================== */
 
 #define MAX_AEAD_ALGORITHMS 4
+#define MAX_NEXT_PROTOCOLS 2
 
 static int
 prepare_request(NKC_Instance inst)
 {
   NKSN_Instance session = inst->session;
-  uint16_t data[MAX_AEAD_ALGORITHMS];
+  uint16_t data[MAX(MAX_AEAD_ALGORITHMS, MAX_NEXT_PROTOCOLS)];
   int i, aead_algorithm, length;
 
   NKSN_BeginMessage(session);
 
-  data[0] = htons(NKE_NEXT_PROTOCOL_NTPV4);
-  if (!NKSN_AddRecord(session, 1, NKE_RECORD_NEXT_PROTOCOL, data, sizeof (data[0])))
+  length = 0;
+  if (inst->req_next_protocols & NKE_FLAG_NEXT_PROTOCOL_NTPV5)
+    data[length++] = htons(NKE_NEXT_PROTOCOL_NTPV5);
+  if (inst->req_next_protocols & NKE_FLAG_NEXT_PROTOCOL_NTPV4)
+    data[length++] = htons(NKE_NEXT_PROTOCOL_NTPV4);
+  if (!NKSN_AddRecord(session, 1, NKE_RECORD_NEXT_PROTOCOL, data, length * sizeof (data[0])))
     return 0;
 
   for (i = length = 0; i < ARR_GetSize(CNF_GetNtsAeads()) && length < MAX_AEAD_ALGORITHMS;
@@ -144,7 +151,7 @@ prepare_request(NKC_Instance inst)
 static int
 process_response(NKC_Instance inst)
 {
-  int next_protocol = -1, aead_algorithm = -1, error = 0;
+  int aead_algorithm = -1, error = 0;
   int i, critical, type, length;
   uint16_t data[NKE_MAX_RECORD_BODY_LENGTH / sizeof (uint16_t)];
 
@@ -152,6 +159,7 @@ process_response(NKC_Instance inst)
   assert(sizeof (data) % sizeof (uint16_t) == 0);
   assert(sizeof (uint16_t) == 2);
 
+  inst->resp_next_protocols = 0;
   inst->compliant_128gcm = 0;
   inst->alt_context.algorithm = AEAD_SIV_INVALID;
   inst->num_cookies = 0;
@@ -172,12 +180,24 @@ process_response(NKC_Instance inst)
 
     switch (type) {
       case NKE_RECORD_NEXT_PROTOCOL:
-        if (!critical || length != 2 || ntohs(data[0]) != NKE_NEXT_PROTOCOL_NTPV4) {
-          DEBUG_LOG("Unexpected NTS-KE next protocol");
+        if (!critical || length % 2 != 0) {
+          DEBUG_LOG("Invalid NTS-KE next protocol record");
           error = 1;
           break;
         }
-        next_protocol = NKE_NEXT_PROTOCOL_NTPV4;
+        for (i = 0; i < length / 2; i++) {
+          switch (ntohs(data[i])) {
+            case NKE_NEXT_PROTOCOL_NTPV4:
+              inst->resp_next_protocols |= NKE_FLAG_NEXT_PROTOCOL_NTPV4;
+              break;
+            case NKE_NEXT_PROTOCOL_NTPV5:
+              inst->resp_next_protocols |= NKE_FLAG_NEXT_PROTOCOL_NTPV5;
+              break;
+            default:
+              DEBUG_LOG("Unexpected NTS-KE next protocol");
+              error = 1;
+          }
+        }
         break;
       case NKE_RECORD_AEAD_ALGORITHM:
         if (length != 2) {
@@ -270,11 +290,11 @@ process_response(NKC_Instance inst)
     }
   }
 
-  DEBUG_LOG("NTS-KE response: error=%d next=%d aead=%d",
-            error, next_protocol, aead_algorithm);
+  DEBUG_LOG("NTS-KE response: error=%d next=%x aead=%d",
+            error, (unsigned int)inst->resp_next_protocols, aead_algorithm);
 
   if (error || inst->num_cookies == 0 ||
-      next_protocol != NKE_NEXT_PROTOCOL_NTPV4 ||
+      inst->resp_next_protocols == 0 ||
       aead_algorithm < 0)
     return 0;
 
@@ -343,7 +363,8 @@ handle_message(void *arg)
 /* ================================================== */
 
 NKC_Instance
-NKC_CreateInstance(IPSockAddr *address, const char *name, uint32_t cert_set)
+NKC_CreateInstance(IPSockAddr *address, const char *name, uint32_t cert_set,
+                   int next_protocols)
 {
   const char **trusted_certs;
   uint32_t *certs_ids;
@@ -354,6 +375,7 @@ NKC_CreateInstance(IPSockAddr *address, const char *name, uint32_t cert_set)
 
   inst->address = *address;
   inst->name = Strdup(name);
+  inst->req_next_protocols = next_protocols;
   inst->session = NKSN_CreateInstance(0, inst->name, handle_message, inst);
   inst->resolving_name = 0;
   inst->destroying = 0;
@@ -477,7 +499,8 @@ NKC_IsActive(NKC_Instance inst)
 /* ================================================== */
 
 int
-NKC_GetNtsData(NKC_Instance inst, NKE_Context *context, NKE_Context *alt_context,
+NKC_GetNtsData(NKC_Instance inst, int *next_protocols,
+               NKE_Context *context, NKE_Context *alt_context,
                NKE_Cookie *cookies, int *num_cookies, int max_cookies,
                IPSockAddr *ntp_address)
 {
@@ -486,6 +509,7 @@ NKC_GetNtsData(NKC_Instance inst, NKE_Context *context, NKE_Context *alt_context
   if (!inst->got_response || inst->resolving_name)
     return 0;
 
+  *next_protocols = inst->resp_next_protocols;
   *context = inst->context;
   *alt_context = inst->alt_context;
 

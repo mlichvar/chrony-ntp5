@@ -43,6 +43,7 @@
 #define NKE_RECORD_COMPLIANT_128GCM_EXPORT 1024
 
 #define NKE_NEXT_PROTOCOL_NTPV4         0
+#define NKE_NEXT_PROTOCOL_NTPV5         0x8001
 
 #define NKE_ERROR_UNRECOGNIZED_CRITICAL_RECORD 0
 #define NKE_ERROR_BAD_REQUEST           1
@@ -50,6 +51,9 @@
 
 #define NKE_ALPN_NAME                   "ntske/1"
 #define NKE_EXPORTER_LABEL              "EXPORTER-network-time-security"
+
+#define NKE_FLAG_NEXT_PROTOCOL_NTPV4    1
+#define NKE_FLAG_NEXT_PROTOCOL_NTPV5    2
 
 #define NKE_MAX_MESSAGE_LENGTH          16384
 #define NKE_MAX_RECORD_BODY_LENGTH      256

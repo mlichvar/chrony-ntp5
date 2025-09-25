@@ -38,7 +38,7 @@ extern NAU_Instance NAU_CreateNoneInstance(void);
 extern NAU_Instance NAU_CreateSymmetricInstance(uint32_t key_id);
 extern NAU_Instance NAU_CreateNtsInstance(IPSockAddr *nts_address, const char *name,
                                           uint32_t cert_set, uint16_t ntp_port,
-                                          int max_retry_interval2);
+                                          int ntpv4, int ntpv5, int max_retry_interval2);
 
 /* Destroy an instance */
 extern void NAU_DestroyInstance(NAU_Instance instance);
