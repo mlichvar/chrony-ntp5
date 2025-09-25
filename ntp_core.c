@@ -1458,7 +1458,8 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
       return 0;
 
     /* TODO: compensate for MAC EF and NTS authenticator/padding */
-    if (request_info && request_info->length > info.length) {
+    if (request_info && request_info->length > info.length &&
+        request_info->auth.mode != NTP_AUTH_NTS) {
       if (!add_ef_padding(&message, &info, request_info->length - info.length))
         return 0;
     }
