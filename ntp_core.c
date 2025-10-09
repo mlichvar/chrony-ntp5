@@ -2415,16 +2415,17 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
     if (message->v5.flags & !htons(NTP_FLAG_SYNCHRONISED))
       pkt_leap = LEAP_Unsynchronised;
     pkt_refid = 0;
+    pkt_root_delay = UTI_Ntp32f28ToDouble(message->v5.root_delay);
+    pkt_root_dispersion = UTI_Ntp32f28ToDouble(message->v5.root_dispersion);
   } else {
     pkt_refid = ntohl(message->v4.reference_id);
-  }
-
-  if (ef_mono_root) {
-    pkt_root_delay = UTI_Ntp32f28ToDouble(ef_mono_root->root_delay);
-    pkt_root_dispersion = UTI_Ntp32f28ToDouble(ef_mono_root->root_dispersion);
-  } else {
-    pkt_root_delay = UTI_Ntp32ToDouble(message->v4.root_delay);
-    pkt_root_dispersion = UTI_Ntp32ToDouble(message->v4.root_dispersion);
+    if (ef_mono_root) {
+      pkt_root_delay = UTI_Ntp32f28ToDouble(ef_mono_root->root_delay);
+      pkt_root_dispersion = UTI_Ntp32f28ToDouble(ef_mono_root->root_dispersion);
+    } else {
+      pkt_root_delay = UTI_Ntp32ToDouble(message->v4.root_delay);
+      pkt_root_dispersion = UTI_Ntp32ToDouble(message->v4.root_dispersion);
+    }
   }
 
   /* Check if the packet is valid per RFC 5905 (section 8) and RFC 9769.
