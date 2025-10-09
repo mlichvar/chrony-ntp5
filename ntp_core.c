@@ -728,6 +728,8 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
     result->ext_field_flags |= NTP_EF_FLAG_SERVER_INFO;
   if (1)
     result->ext_field_flags |= NTP_EF_FLAG_REFERENCE_TS;
+  if (1)
+    result->ext_field_flags |= NTP_EF_FLAG_MONO_RECEIVE_TS;
 
   /* TODO: make sure mode is client if version == 5 */
 
@@ -1278,6 +1280,37 @@ add_ef_reference_ts(NTP_Packet *message, NTP_PacketInfo *info, struct timespec *
 /* ================================================== */
 
 static int
+add_ef_mono_receive_ts(NTP_Packet *message, NTP_PacketInfo *info, struct timespec *rx)
+{
+  struct timespec mono_rx;
+  NTP_EFMonoReceiveTs ef;
+  NTP_int64 ts_fuzz;
+
+  memset(&ef, 0, sizeof (ef));
+
+  if (info->mode != MODE_CLIENT) {
+    ef.mono_epoch = htonl(server_mono_epoch);
+    if (rx)
+      UTI_AddDoubleToTimespec(rx, server_mono_offset, &mono_rx);
+    else
+      UTI_ZeroTimespec(&mono_rx);
+    UTI_GetNtp64Fuzz(&ts_fuzz, message->precision);
+    UTI_TimespecToNtp64(&mono_rx, &ef.mono_receive_ts, &ts_fuzz);
+  }
+
+  if (!NEF_AddField(message, info, NTP_EF_MONO_RECEIVE_TS, &ef, sizeof (ef))) {
+    DEBUG_LOG("Could not add EF");
+    return 0;
+  }
+
+  info->ext_field_flags |= NTP_EF_FLAG_MONO_RECEIVE_TS;
+
+  return 1;
+}
+
+/* ================================================== */
+
+static int
 add_ef_draft_id(NTP_Packet *message, NTP_PacketInfo *info)
 {
   if (!NEF_AddField(message, info, NTP_EF_DRAFT_ID, NTP_EF_DRAFT_ID_STRING,
@@ -1513,6 +1546,11 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
 
     if (ext_field_flags & NTP_EF_FLAG_REFERENCE_TS) {
       if (!add_ef_reference_ts(&message, &info, &our_ref_time))
+        return 0;
+    }
+
+    if (ext_field_flags & NTP_EF_FLAG_MONO_RECEIVE_TS) {
+      if (!add_ef_mono_receive_ts(&message, &info, smooth_time ? NULL : &local_receive))
         return 0;
     }
 
@@ -1945,6 +1983,10 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
         if (info->version == 5 && ef_body_length == sizeof (NTP_EFReferenceTs))
           info->ext_field_flags |= NTP_EF_FLAG_REFERENCE_TS;
         break;
+      case NTP_EF_MONO_RECEIVE_TS:
+        if (info->version == 5 && ef_body_length == sizeof (NTP_EFMonoReceiveTs))
+          info->ext_field_flags |= NTP_EF_FLAG_MONO_RECEIVE_TS;
+        break;
       case NTP_EF_DRAFT_ID:
         if (ef_body_length == strlen(NTP_EF_DRAFT_ID_STRING) &&
             memcmp(ef_body, NTP_EF_DRAFT_ID_STRING, strlen(NTP_EF_DRAFT_ID_STRING)) == 0)
@@ -2313,6 +2355,9 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
   void *ef_body;
   NTP_EFNetCorrection *ef_net_correction;
   NTP_EFExpMonoRoot *ef_mono_root;
+  NTP_EFMonoReceiveTs *ef_mono_receive_ts;
+  NTP_int64 mono_receive_ts;
+  uint32_t mono_epoch;
   uint8_t *ef_reference_ids;
   int ef_reference_ids_length;
 
@@ -2329,6 +2374,7 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
   ef_net_correction = NULL;
   ef_reference_ids = NULL;
   ef_reference_ids_length = 0;
+  ef_mono_receive_ts = NULL;
 
   /* Find requested non-authentication extension fields */
   if (inst->ext_field_flags & info->ext_field_flags) {
@@ -2352,6 +2398,11 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
         case NTP_EF_REFERENCE_IDS_RESP:
           ef_reference_ids = ef_body;
           ef_reference_ids_length = ef_body_length;
+          break;
+        case NTP_EF_MONO_RECEIVE_TS:
+          if (inst->ext_field_flags & NTP_EF_FLAG_MONO_RECEIVE_TS &&
+              ef_body_length == sizeof (*ef_mono_receive_ts))
+            ef_mono_receive_ts = ef_body;
           break;
       }
     }
@@ -2460,15 +2511,28 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
        the new sample.  In the interleaved mode, cancel the correction out in
        remote timestamps of the previous request and response, which were
        captured before the source accumulated the new time corrections. */
-    if (ef_mono_root && inst->remote_mono_epoch == ntohl(ef_mono_root->mono_epoch) &&
-        !UTI_IsZeroNtp64(&ef_mono_root->mono_receive_ts) &&
-        !UTI_IsZeroNtp64(&inst->remote_ntp_monorx)) {
-      mono_doffset =
-          UTI_DiffNtp64ToDouble(&ef_mono_root->mono_receive_ts, &inst->remote_ntp_monorx) -
-          UTI_DiffNtp64ToDouble(&message->receive_ts, &inst->remote_ntp_rx);
-      if (fabs(mono_doffset) > MAX_MONO_DOFFSET)
+    if (ef_mono_receive_ts || ef_mono_root) {
+      if (ef_mono_receive_ts) {
+        mono_epoch = ntohl(ef_mono_receive_ts->mono_epoch);
+        mono_receive_ts = ef_mono_receive_ts->mono_receive_ts;
+      } else {
+        mono_epoch = ntohl(ef_mono_root->mono_epoch);
+        mono_receive_ts = ef_mono_root->mono_receive_ts;
+      }
+
+      if (inst->remote_mono_epoch == mono_epoch && !UTI_IsZeroNtp64(&mono_receive_ts) &&
+          !UTI_IsZeroNtp64(&inst->remote_ntp_monorx)) {
+        mono_doffset =
+            UTI_DiffNtp64ToDouble(&mono_receive_ts, &inst->remote_ntp_monorx) -
+            UTI_DiffNtp64ToDouble(&message->receive_ts, &inst->remote_ntp_rx);
+        if (fabs(mono_doffset) > MAX_MONO_DOFFSET)
+          mono_doffset = 0.0;
+      } else {
         mono_doffset = 0.0;
+      }
     } else {
+      mono_epoch = 0;
+      UTI_ZeroNtp64(&mono_receive_ts);
       mono_doffset = 0.0;
     }
 
@@ -2619,6 +2683,8 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
     sample.offset = sample.peer_delay = sample.peer_dispersion = 0.0;
     sample.root_delay = sample.root_dispersion = 0.0;
     sample.time = rx_ts->ts;
+    mono_epoch = 0;
+    UTI_ZeroNtp64(&mono_receive_ts);
     mono_doffset = 0.0;
     net_correction = 0.0;
     local_receive = *rx_ts;
@@ -2658,9 +2724,9 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
     /* If available, update the monotonic timestamp and accumulate the offset.
        This needs to be done here to not lose changes in remote_ntp_rx in
        symmetric mode when there are multiple responses per request. */
-    if (ef_mono_root && !UTI_IsZeroNtp64(&ef_mono_root->mono_receive_ts)) {
-      inst->remote_mono_epoch = ntohl(ef_mono_root->mono_epoch);
-      inst->remote_ntp_monorx = ef_mono_root->mono_receive_ts;
+    if (!UTI_IsZeroNtp64(&mono_receive_ts)) {
+      inst->remote_mono_epoch = mono_epoch;
+      inst->remote_ntp_monorx = mono_receive_ts;
       inst->mono_doffset += mono_doffset;
     } else {
       inst->remote_mono_epoch = 0;
