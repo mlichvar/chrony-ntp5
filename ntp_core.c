@@ -722,8 +722,10 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
     }
   }
 
-  /* Request reference IDs if using NTPv5 */
+  /* Request these EFs if using NTPv5 */
   result->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
+  if (1)
+    result->ext_field_flags |= NTP_EF_FLAG_SERVER_INFO;
 
   /* TODO: make sure mode is client if version == 5 */
 
@@ -1233,6 +1235,28 @@ add_ef_reference_ids_resp(NTP_Packet *message, NTP_PacketInfo *info, int offset,
 /* ================================================== */
 
 static int
+add_ef_server_info(NTP_Packet *message, NTP_PacketInfo *info)
+{
+  NTP_EFServerInfo ef;
+
+  memset(&ef, 0, sizeof (ef));
+
+  if (info->mode != MODE_CLIENT)
+    ef.versions = htons(((1 << 3) | (1 << 4) | (1 << 5)) >> 1);
+
+  if (!NEF_AddField(message, info, NTP_EF_SERVER_INFO, &ef, sizeof (ef))) {
+    DEBUG_LOG("Could not add EF");
+    return 0;
+  }
+
+  info->ext_field_flags |= NTP_EF_FLAG_SERVER_INFO;
+
+  return 1;
+}
+
+/* ================================================== */
+
+static int
 add_ef_draft_id(NTP_Packet *message, NTP_PacketInfo *info)
 {
   if (!NEF_AddField(message, info, NTP_EF_DRAFT_ID, NTP_EF_DRAFT_ID_STRING,
@@ -1459,6 +1483,11 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
                                        request_info->ef_ref_ids.length))
           return 0;
       }
+    }
+
+    if (ext_field_flags & NTP_EF_FLAG_SERVER_INFO) {
+      if (!add_ef_server_info(&message, &info))
+        return 0;
     }
 
     if (!add_ef_draft_id(&message, &info))
@@ -1881,6 +1910,10 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
       case NTP_EF_REFERENCE_IDS_RESP:
         if (info->version == 5 && info->mode == MODE_SERVER && ef_body_length >= 4)
           info->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
+        break;
+      case NTP_EF_SERVER_INFO:
+        if (info->version == 5 && ef_body_length == sizeof (NTP_EFServerInfo))
+          info->ext_field_flags |= NTP_EF_FLAG_SERVER_INFO;
         break;
       case NTP_EF_DRAFT_ID:
         if (ef_body_length == strlen(NTP_EF_DRAFT_ID_STRING) &&
