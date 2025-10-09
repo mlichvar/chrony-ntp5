@@ -154,12 +154,14 @@ typedef struct {
 #define NTP_EF_REFERENCE_IDS_REQ        0xF503
 #define NTP_EF_REFERENCE_IDS_RESP       0xF504
 #define NTP_EF_SERVER_INFO              0xF505
+#define NTP_EF_REFERENCE_TS             0xF507
 #define NTP_EF_DRAFT_ID                 0xF5FF
 
 #define NTP_EF_FLAG_NET_CORRECTION      0x1
 #define NTP_EF_FLAG_EXP_MONO_ROOT       0x2
 #define NTP_EF_FLAG_REFERENCE_IDS       0x4
 #define NTP_EF_FLAG_SERVER_INFO         0x8
+#define NTP_EF_FLAG_REFERENCE_TS        0x10
 
 /* Network Correction extension field */
 typedef struct {
@@ -182,6 +184,10 @@ typedef struct {
   uint16_t versions;
   uint16_t reserved;
 } NTP_EFServerInfo;
+
+typedef struct {
+  NTP_int64 reference_ts;
+} NTP_EFReferenceTs;
 
 #define NTP_EF_DRAFT_ID_STRING          "draft-ietf-ntp-ntpv5-06"
 
