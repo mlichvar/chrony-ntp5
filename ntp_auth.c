@@ -32,6 +32,7 @@
 #include "logging.h"
 #include "memory.h"
 #include "ntp_auth.h"
+#include "ntp_ext.h"
 #include "ntp_signd.h"
 #include "nts_ntp.h"
 #include "nts_ntp_client.h"
@@ -52,31 +53,40 @@ struct NAU_Instance_Record {
 static int
 generate_symmetric_auth(uint32_t key_id, NTP_Packet *packet, NTP_PacketInfo *info)
 {
-  int auth_len, max_auth_len;
+  int auth_len, max_auth_len, ef_header;
+  void *ef_body;
 
   if (info->length + NTP_MIN_MAC_LENGTH > sizeof (*packet)) {
     DEBUG_LOG("Packet too long");
     return 0;
   }
 
+  ef_header = info->version == 5 ? 4 : 0;
+
   /* Truncate long MACs in NTPv4 packets to allow deterministic parsing
      of extension fields (RFC 7822) */
   max_auth_len = (info->version == 4 ? NTP_MAX_V4_MAC_LENGTH : NTP_MAX_MAC_LENGTH) - 4;
-  max_auth_len = MIN(max_auth_len, sizeof (*packet) - info->length - 4);
+  max_auth_len = MIN(max_auth_len, sizeof (*packet) - info->length - ef_header - 4);
 
   auth_len = KEY_GenerateAuth(key_id, packet, info->length,
-                              (unsigned char *)packet + info->length + 4, max_auth_len);
+                              (unsigned char *)packet + info->length + ef_header + 4,
+                              max_auth_len);
   if (auth_len < NTP_MIN_MAC_LENGTH - 4) {
     DEBUG_LOG("Could not generate auth data with key %"PRIu32, key_id);
     return 0;
   }
 
-  *(uint32_t *)((unsigned char *)packet + info->length) = htonl(key_id);
+  *(uint32_t *)((unsigned char *)packet + info->length + ef_header) = htonl(key_id);
 
   info->auth.mac.start = info->length;
-  info->auth.mac.length = 4 + auth_len;
+  info->auth.mac.length = ef_header + 4 + auth_len;
   info->auth.mac.key_id = key_id;
-  info->length += info->auth.mac.length;
+
+  if (ef_header > 0)
+    /* TODO: add the EF before generating auth? */
+    NEF_AddBlankField(packet, info, NTP_EF_MAC, 4 + auth_len, &ef_body);
+  else
+    info->length += info->auth.mac.length;
 
   return 1;
 }
@@ -86,17 +96,19 @@ generate_symmetric_auth(uint32_t key_id, NTP_Packet *packet, NTP_PacketInfo *inf
 static int
 check_symmetric_auth(NTP_Packet *packet, NTP_PacketInfo *info)
 {
-  int trunc_len;
+  int ef_header, trunc_len;
 
   if (info->auth.mac.length < NTP_MIN_MAC_LENGTH)
     return 0;
+
+  ef_header = info->version == 5 ? 4 : 0;
 
   trunc_len = info->version == 4 && info->auth.mac.length <= NTP_MAX_V4_MAC_LENGTH ?
               NTP_MAX_V4_MAC_LENGTH : NTP_MAX_MAC_LENGTH;
 
   if (!KEY_CheckAuth(info->auth.mac.key_id, packet, info->auth.mac.start,
-                     (unsigned char *)packet + info->auth.mac.start + 4,
-                     info->auth.mac.length - 4, trunc_len - 4))
+                     (unsigned char *)packet + info->auth.mac.start + ef_header + 4,
+                     info->auth.mac.length - ef_header - 4, trunc_len - 4))
     return 0;
 
   return 1;

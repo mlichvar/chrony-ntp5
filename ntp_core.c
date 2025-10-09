@@ -1466,6 +1466,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
 
     /* TODO: compensate for MAC EF and NTS authenticator/padding */
     if (request_info && request_info->length > info.length &&
+        request_info->auth.mode != NTP_AUTH_SYMMETRIC &&
         request_info->auth.mode != NTP_AUTH_NTS) {
       if (!add_ef_padding(&message, &info, request_info->length - info.length))
         return 0;
@@ -1857,6 +1858,14 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
           info->ext_field_flags |= NTP_EF_FLAG_EXP_MONO_ROOT;
         break;
       case NTP_EF_PADDING:
+        break;
+      case NTP_EF_MAC:
+        if (info->version == 5 && ef_body_length >= 4 && remainder == ef_length) {
+          info->auth.mode = NTP_AUTH_SYMMETRIC;
+          info->auth.mac.start = parsed;
+          info->auth.mac.length = 4 + ef_body_length;
+          info->auth.mac.key_id = ntohl(*(uint32_t *)ef_body);
+        }
         break;
       case NTP_EF_REFERENCE_IDS_REQ:
         if (info->version == 5 && info->mode == MODE_CLIENT && ef_body_length >= 4) {
