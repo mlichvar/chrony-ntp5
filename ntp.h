@@ -196,7 +196,7 @@ typedef struct {
   NTP_int64 mono_receive_ts;
 } NTP_EFMonoReceiveTs;
 
-#define NTP_EF_DRAFT_ID_STRING          "draft-ietf-ntp-ntpv5-06"
+#define NTP_EF_DRAFT_ID_STRING          "draft-ietf-ntp-ntpv5-07"
 
 /* Authentication extension fields */
 
