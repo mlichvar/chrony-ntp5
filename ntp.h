@@ -90,7 +90,7 @@ typedef enum {
   NTP_TIMESCALE_SMEARED_UTC = 3,
 } NTP_Timescale;
 
-#define NTP_FLAG_SYNCHRONISED 0x1
+#define NTP_FLAG_UNSYNCHRONISED 0x1
 #define NTP_FLAG_INTERLEAVED 0x2
 #define NTP_FLAG_AUTH_NAK 0x4
 

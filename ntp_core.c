@@ -1440,8 +1440,13 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
     message.lvm &= 0x3f;
     message.v5.timescale = NTP_TIMESCALE_UTC;
     message.v5.era = 0;
-    message.v5.flags = (leap_status != LEAP_Unsynchronised ? htons(NTP_FLAG_SYNCHRONISED) : 0) |
+    message.v5.flags = (my_mode == MODE_CLIENT ||
+                        leap_status == LEAP_Unsynchronised ? htons(NTP_FLAG_UNSYNCHRONISED) : 0) |
                        (interleaved ? htons(NTP_FLAG_INTERLEAVED) : 0);
+    if (my_mode == MODE_SERVER && request && (message.v5.flags & ~request->v5.flags) != 0) {
+      DEBUG_LOG("Response has not-requested flags");
+      return 0;
+    }
     message.v5.root_delay = UTI_DoubleToNtp32f28(our_root_delay);
     message.v5.root_dispersion = UTI_DoubleToNtp32f28(our_root_dispersion);
   } else {
@@ -2413,7 +2418,7 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
   pkt_version = NTP_LVM_TO_VERSION(message->lvm);
 
   if (info->version == 5) {
-    if (message->v5.flags & !htons(NTP_FLAG_SYNCHRONISED))
+    if (message->v5.flags & htons(NTP_FLAG_UNSYNCHRONISED))
       pkt_leap = LEAP_Unsynchronised;
     pkt_refid = 0;
     pkt_root_delay = UTI_Ntp32f28ToDouble(message->v5.root_delay);
