@@ -139,8 +139,14 @@ typedef struct {
 #define NTP_REFID_LOCAL 0x7F7F0101UL /* 127.127.1.1 */
 #define NTP_REFID_SMOOTH 0x7F7F01FFUL /* 127.127.1.255 */
 
-/* Length of the NTPv5 bloom filter containing reference IDs */
-#define NTP_BLOOM_FILTER_LENGTH (4096 / 8)
+/* Length of the NTPv5 list of reference IDs */
+#define NTP_REFID_LIST_LENGTH 32
+
+/* Length of the NTPv5 reference ID in bits */
+#define NTP_REFID_LIST_ID_BITS 56
+
+/* Scaling of the NTPv5 reference ID log2 share */
+#define NTP_REFID_LIST_SHARE_SCALE 16.0
 
 /* Magic reference timestamp indicating NTPv5 support */
 #define NTP_MAGIC_V5_REFERENCE_TS "NTP5DRFT"
@@ -225,7 +231,7 @@ typedef struct {
   int ext_field_flags;
 
   struct {
-    int offset;
+    int index;
     int length;
   } ef_ref_ids;
 

@@ -362,7 +362,7 @@ void SRC_DestroyInstance(SRC_Instance instance)
 void
 SRC_ResetInstance(SRC_Instance instance)
 {
-  SRC_UpdateReferenceIds(instance, NULL, 0, 0);
+  REF_ZeroReferenceIds(&instance->ref_ids);
   instance->updates = 0;
   instance->reachability = 0;
   instance->reachability_size = 0;
@@ -397,12 +397,10 @@ SRC_SetRefid(SRC_Instance instance, uint32_t ref_id, IPAddr *addr)
 /* ================================================== */
 
 void
-SRC_UpdateReferenceIds(SRC_Instance instance, uint8_t *fragment, int offset, int length)
+SRC_UpdateReferenceIds(SRC_Instance instance, int first_index, uint8_t *fragment,
+                       int fragment_length)
 {
-  if (!fragment)
-    REF_ZeroReferenceIds(&instance->ref_ids);
-  else
-    REF_UpdateReferenceIds(&instance->ref_ids, fragment, offset, length);
+  REF_UpdateReferenceIds(&instance->ref_ids, first_index, fragment, fragment_length);
 }
 
 /* ================================================== */
@@ -900,9 +898,20 @@ combine_sources(int n_sel_sources, struct timespec *ref_time, double *offset,
   double frequency_weight, sum_frequency_weight, sum_frequency;
   double inv_sum2_frequency_sd, inv_sum2_skew;
   int i, index, combined;
+  double *ref_ids_weights;
+  REF_ReferenceIds **combine_ref_ids;
 
-  if (n_sel_sources == 1)
+  if (n_sel_sources == 1) {
+    REF_ReferenceIds *r = &sources[selected_source_index]->ref_ids;
+    double w = 1.0;
+
+    REF_CombineReferenceIds(ref_ids, 1, &w, &r);
     return 1;
+  }
+
+  /* TODO: avoid these allocations */
+  ref_ids_weights = MallocArray(double, n_sel_sources);
+  combine_ref_ids = MallocArray(REF_ReferenceIds *, n_sel_sources);
 
   sum_offset_weight = sum_offset = sum2_offset_sd = 0.0;
   sum_frequency_weight = sum_frequency = inv_sum2_frequency_sd = inv_sum2_skew = 0.0;
@@ -961,7 +970,8 @@ combine_sources(int n_sel_sources, struct timespec *ref_time, double *offset,
     inv_sum2_frequency_sd += 1.0 / SQUARE(src_frequency_sd);
     inv_sum2_skew += 1.0 / SQUARE(src_skew);
 
-    REF_AddReferenceIds(&sources[index]->ref_ids, ref_ids);
+    combine_ref_ids[combined] = &sources[index]->ref_ids;
+    ref_ids_weights[combined] = offset_weight;
 
     combined++;
   }
@@ -975,6 +985,12 @@ combine_sources(int n_sel_sources, struct timespec *ref_time, double *offset,
 
   DEBUG_LOG("combined result offset=%e osd=%e freq=%e fsd=%e skew=%e",
             *offset, *offset_sd, *frequency, *frequency_sd, *skew);
+
+  for (i = 0; i < combined; i++)
+    ref_ids_weights[i] /= sum_offset_weight;
+  REF_CombineReferenceIds(ref_ids, combined, ref_ids_weights, combine_ref_ids);
+  Free(combine_ref_ids);
+  Free(ref_ids_weights);
 
   return combined;
 }
@@ -1522,8 +1538,6 @@ SRC_SelectSource(SRC_Instance updated_inst)
                       &src_offset, &src_offset_sd,
                       &src_frequency, &src_frequency_sd, &src_skew,
                       &src_root_delay, &src_root_dispersion);
-
-  ref_ids = sources[selected_source_index]->ref_ids;
 
   combined = combine_sources(n_sel_sources, &ref_time, &src_offset, &src_offset_sd,
                              &src_frequency, &src_frequency_sd, &src_skew, &ref_ids);

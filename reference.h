@@ -73,19 +73,20 @@ extern void REF_SetModeEndHandler(REF_ModeEndHandler handler);
 extern REF_LeapMode REF_GetLeapMode(void);
 
 typedef struct {
-  uint8_t filter[NTP_BLOOM_FILTER_LENGTH];
+  uint64_t values[NTP_REFID_LIST_LENGTH];
 } REF_ReferenceIds;
 
 extern void REF_ZeroReferenceIds(REF_ReferenceIds *ref_ids);
 
-extern void REF_UpdateReferenceIds(REF_ReferenceIds *ref_ids, uint8_t *fragment,
-                                   int offset, int length);
+extern void REF_UpdateReferenceIds(REF_ReferenceIds *ref_ids, int first_index,
+                                   uint8_t *fragment, int fragment_length);
 
-extern void REF_AddReferenceIds(REF_ReferenceIds *src, REF_ReferenceIds *dest);
+extern void REF_CombineReferenceIds(REF_ReferenceIds *dest, int n, double *weights,
+                                    REF_ReferenceIds **sources);
 
-/* Check if our reference ID is not present in a provided set of reference IDs,
-   i.e. there is no synchronization loop present (false positives are possible
-   due to the use of Bloom filter) */
+/* Check if our reference ID is not present in the provided reference IDs, i.e.
+   there is no synchronization loop present (false negatives are possible
+   due the limited length of the list) */
 extern int REF_CheckReferenceIds(REF_ReferenceIds *ref_ids);
 
 extern REF_ReferenceIds *REF_GetReferenceIds(void);
@@ -106,8 +107,7 @@ extern REF_ReferenceIds *REF_GetReferenceIds(void);
    
    v4_ref_id is the NTPv4 reference_id of the source
 
-   v5_ref_ids is the NTPv5 Bloom filter containing reference IDs of all sources
-   up to the chain up to the primary time sources
+   v5_ref_ids is the NTPv5 list of reference IDs
 
    ref_time is the time at which the we last set the reference source up
 

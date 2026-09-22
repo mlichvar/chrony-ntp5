@@ -325,11 +325,11 @@ static ARR_Instance broadcasts;
 #define MAX_INTERLEAVED_L2L_RATIO 0.1
 
 /* Number of requests and responses needed to get a whole NTPv5
-   reference IDs Bloom filter */
+   reference IDs list */
 #define REFIDS_FRAGMENTS 4
 
-/* Length of a single reference IDs fragment */
-#define REFIDS_FRAGMENT_LENGTH (NTP_BLOOM_FILTER_LENGTH / REFIDS_FRAGMENTS)
+/* Length of a single reference IDs fragment in bytes */
+#define REFIDS_FRAGMENT_LENGTH (8 * NTP_REFID_LIST_LENGTH / REFIDS_FRAGMENTS)
 
 /* Maximum acceptable change in server mono<->real offset */
 #define MAX_MONO_DOFFSET 16.0
@@ -1197,16 +1197,17 @@ add_ef_padding(NTP_Packet *message, NTP_PacketInfo *info, int length)
 /* ================================================== */
 
 static int
-add_ef_reference_ids_req(NTP_Packet *message, NTP_PacketInfo *info, int offset, int length)
+add_ef_reference_ids_req(NTP_Packet *message, NTP_PacketInfo *info,
+                         int first_index, int fragment_length)
 {
-  uint16_t buf[NTP_BLOOM_FILTER_LENGTH / sizeof (uint16_t)] = {0};
+  char buf[REFIDS_FRAGMENT_LENGTH * REFIDS_FRAGMENTS] = {0};
 
-  if (length < 0 || length > sizeof (buf))
+  if (fragment_length < 0 || fragment_length > sizeof (buf))
     return 0;
 
-  buf[0] = htons(offset);
+  buf[0] = first_index;
 
-  if (!NEF_AddField(message, info, NTP_EF_REFERENCE_IDS_REQ, buf, length)) {
+  if (!NEF_AddField(message, info, NTP_EF_REFERENCE_IDS_REQ, buf, fragment_length)) {
     DEBUG_LOG("Could not add EF");
     return 0;
   }
@@ -1217,19 +1218,19 @@ add_ef_reference_ids_req(NTP_Packet *message, NTP_PacketInfo *info, int offset, 
 /* ================================================== */
 
 static int
-add_ef_reference_ids_resp(NTP_Packet *message, NTP_PacketInfo *info, int offset, int length)
+add_ef_reference_ids_resp(NTP_Packet *message, NTP_PacketInfo *info,
+                          int first_index, int fragment_length)
 {
   REF_ReferenceIds *ref_ids;
 
-  if (offset < 0 || offset > sizeof (ref_ids->filter) ||
-      length < 0 || length > sizeof (ref_ids->filter) ||
-      offset + length > sizeof (ref_ids->filter))
+  if (first_index < 0 || fragment_length < 1 ||
+      first_index * sizeof (ref_ids->values[0]) + fragment_length > sizeof (ref_ids->values))
     return 0;
 
   ref_ids = REF_GetReferenceIds();
 
-  if (!NEF_AddField(message, info, NTP_EF_REFERENCE_IDS_RESP, ref_ids->filter + offset,
-                    length)) {
+  if (!NEF_AddField(message, info, NTP_EF_REFERENCE_IDS_RESP, &ref_ids->values[first_index],
+                    fragment_length)) {
     DEBUG_LOG("Could not add EF");
     return 0;
   }
@@ -1536,10 +1537,11 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
     if (ext_field_flags & NTP_EF_FLAG_REFERENCE_IDS) {
       if (my_mode == MODE_CLIENT) {
         if (!add_ef_reference_ids_req(&message, &info, refids_fragment *
-                                      REFIDS_FRAGMENT_LENGTH, REFIDS_FRAGMENT_LENGTH))
+                                        NTP_REFID_LIST_LENGTH / REFIDS_FRAGMENTS,
+                                      REFIDS_FRAGMENT_LENGTH))
           return 0;
       } else {
-        if (!add_ef_reference_ids_resp(&message, &info, request_info->ef_ref_ids.offset,
+        if (!add_ef_reference_ids_resp(&message, &info, request_info->ef_ref_ids.index,
                                        request_info->ef_ref_ids.length))
           return 0;
       }
@@ -1875,7 +1877,7 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
   info->mode = NTP_LVM_TO_MODE(packet->lvm);
   info->ext_fields = 0;
   info->ext_field_flags = 0;
-  info->ef_ref_ids.offset = 0;
+  info->ef_ref_ids.index = 0;
   info->ef_ref_ids.length = 0;
   info->auth.mode = NTP_AUTH_NONE;
 
@@ -1967,18 +1969,20 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
         }
         break;
       case NTP_EF_REFERENCE_IDS_REQ:
-        if (info->version == 5 && info->mode == MODE_CLIENT && ef_body_length >= 4) {
-          uint16_t offset = ntohs(*(uint16_t *)ef_body);
+        if (info->version == 5 && info->mode == MODE_CLIENT && ef_body_length >= 8 &&
+            ef_body_length % 8 == 0) {
+          uint8_t index = ((uint8_t *)ef_body)[0];
 
-          if (offset + ef_body_length <= NTP_BLOOM_FILTER_LENGTH) {
-            info->ef_ref_ids.offset = offset;
+          if (index + ef_body_length / 8 <= NTP_REFID_LIST_LENGTH) {
+            info->ef_ref_ids.index = index;
             info->ef_ref_ids.length = ef_body_length;
             info->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
           }
         }
         break;
       case NTP_EF_REFERENCE_IDS_RESP:
-        if (info->version == 5 && info->mode == MODE_SERVER && ef_body_length >= 4)
+        if (info->version == 5 && info->mode == MODE_SERVER && ef_body_length >= 8 &&
+            ef_body_length % 8 == 0)
           info->ext_field_flags |= NTP_EF_FLAG_REFERENCE_IDS;
         break;
       case NTP_EF_SERVER_INFO:
@@ -2168,7 +2172,7 @@ check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_PacketInfo *info,
   if (!NIO_IsServerSocketOpen() || REF_GetMode() != REF_ModeNormal)
     return 1;
 
-  /* With NTPv5, check only the reference IDs Bloom filter */
+  /* With NTPv5, check only the reference IDs list */
   if (info->version == 5) {
     REF_ReferenceIds ref_ids;
 
@@ -2181,9 +2185,9 @@ check_sync_loop(NCR_Instance inst, NTP_Packet *message, NTP_PacketInfo *info,
     ref_ids = *SRC_GetReferenceIds(inst->source);
 
     if (ef_ref_ids && ef_ref_ids_len == REFIDS_FRAGMENT_LENGTH) {
-      REF_UpdateReferenceIds(&ref_ids, ef_ref_ids,
-                             inst->requested_refids_fragment * REFIDS_FRAGMENT_LENGTH,
-                             REFIDS_FRAGMENT_LENGTH);
+      REF_UpdateReferenceIds(&ref_ids, inst->requested_refids_fragment *
+                                         (NTP_REFID_LIST_LENGTH / REFIDS_FRAGMENTS),
+                             ef_ref_ids, REFIDS_FRAGMENT_LENGTH);
     }
 
     return REF_CheckReferenceIds(&ref_ids);
@@ -2402,8 +2406,11 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
             ef_mono_root = ef_body;
           break;
         case NTP_EF_REFERENCE_IDS_RESP:
-          ef_reference_ids = ef_body;
-          ef_reference_ids_length = ef_body_length;
+          if (inst->ext_field_flags & NTP_EF_FLAG_REFERENCE_IDS &&
+              ef_body_length >= 8 && ef_body_length % 8 == 0) {
+            ef_reference_ids = ef_body;
+            ef_reference_ids_length = ef_body_length;
+          }
           break;
         case NTP_EF_MONO_RECEIVE_TS:
           if (inst->ext_field_flags & NTP_EF_FLAG_MONO_RECEIVE_TS &&
@@ -2809,9 +2816,9 @@ process_response(NCR_Instance inst, int saved, NTP_Local_Address *local_addr,
     inst->tx_count = 0;
 
     if (ef_reference_ids && ef_reference_ids_length == REFIDS_FRAGMENT_LENGTH) {
-      SRC_UpdateReferenceIds(inst->source, ef_reference_ids,
-                             inst->requested_refids_fragment * REFIDS_FRAGMENT_LENGTH,
-                             REFIDS_FRAGMENT_LENGTH);
+      SRC_UpdateReferenceIds(inst->source, inst->requested_refids_fragment *
+                                             (NTP_REFID_LIST_LENGTH / REFIDS_FRAGMENTS),
+                             ef_reference_ids, REFIDS_FRAGMENT_LENGTH);
       inst->last_refids_fragment = inst->requested_refids_fragment;
       if (inst->last_refids_fragment + 1 == REFIDS_FRAGMENTS)
         inst->completed_refids = 1;

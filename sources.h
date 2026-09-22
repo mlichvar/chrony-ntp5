@@ -101,11 +101,11 @@ extern void SRC_SetActive(SRC_Instance inst);
 /* This routine sets the source as not receiving reachability updates */
 extern void SRC_UnsetActive(SRC_Instance inst);
 
-/* This routine updates the NTPv5 reference ID Bloom filter */
-extern void SRC_UpdateReferenceIds(SRC_Instance inst, uint8_t *fragment,
-                                   int offset, int length);
+/* This routine updates the NTPv5 list of reference IDs */
+extern void SRC_UpdateReferenceIds(SRC_Instance inst, int first_index,
+                                   uint8_t *fragment, int fragment_length);
 
-/* This routine returns the NTPv5 reference ID Bloom filter */
+/* This routine returns the NTPv5 list of reference IDs */
 extern REF_ReferenceIds *SRC_GetReferenceIds(SRC_Instance inst);
 
 /* This routine updates the reachability register */

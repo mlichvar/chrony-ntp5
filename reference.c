@@ -62,7 +62,6 @@ static int our_leap_sec;
 static int our_tai_offset;
 static int our_stratum;
 static uint32_t our_ref_id;
-static REF_ReferenceIds our_own_ref_id;
 static REF_ReferenceIds our_ref_ids;
 static IPAddr our_ref_ip;
 static struct timespec our_ref_time;
@@ -192,6 +191,54 @@ handle_slew(struct timespec *raw,
 
 /* ================================================== */
 
+static double
+get_refids_share(REF_ReferenceIds *ref_ids, int index)
+{
+  Integer64 v;
+  memcpy(&v, &ref_ids->values[index], sizeof (v));
+
+  return pow(2.0, -(double)(UTI_Integer64NetworkToHost(v) >> NTP_REFID_LIST_ID_BITS) /
+                  NTP_REFID_LIST_SHARE_SCALE);
+}
+
+/* ================================================== */
+
+static uint64_t
+get_refids_id(REF_ReferenceIds *ref_ids, int index)
+{
+  Integer64 v;
+  memcpy(&v, &ref_ids->values[index], sizeof (v));
+
+  return UTI_Integer64NetworkToHost(v) & ~(-1ULL << NTP_REFID_LIST_ID_BITS);
+}
+
+/* ================================================== */
+
+static void
+set_refids_value(REF_ReferenceIds *ref_ids, int index, double share, uint64_t id)
+{
+  int log_share;
+  Integer64 v;
+
+  log_share = round(-log2(CLAMP(1e-9, share, 1.0)) * NTP_REFID_LIST_SHARE_SCALE);
+  log_share = CLAMP(0, log_share, 255);
+  v = UTI_Integer64HostToNetwork(((uint64_t)log_share << NTP_REFID_LIST_ID_BITS) | id);
+  memcpy(&ref_ids->values[index], &v, sizeof (ref_ids->values[index]));
+}
+
+/* ================================================== */
+
+static void
+clear_refids(REF_ReferenceIds *ref_ids, int first_index)
+{
+  int i;
+
+  for (i = first_index; i < NTP_REFID_LIST_LENGTH; i++)
+    set_refids_value(ref_ids, i, 0.0, 0);
+}
+
+/* ================================================== */
+
 void
 REF_Initialise(void)
 {
@@ -215,13 +262,13 @@ REF_Initialise(void)
   drift_file_age = 0.0;
   local_activate_ok = 0;
 
-  memset(our_own_ref_id.filter, 0, sizeof (our_own_ref_id.filter));
-  for (int i = 0; i < 10; i++) {
-    uint16_t index;
-    UTI_GetRandomBytesUrandom(&index, sizeof (index));
-    index %= 8 * sizeof (our_own_ref_id.filter);
-    our_own_ref_id.filter[index / 8] |= 1 << (index % 8);
-  }
+  do {
+    uint64_t v;
+    UTI_GetRandomBytesUrandom(&v, sizeof (v));
+    v &= ~(-1ULL << NTP_REFID_LIST_ID_BITS);
+    set_refids_value(&our_ref_ids, 0, 1.0, v);
+  } while (get_refids_id(&our_ref_ids, 0) == 0);
+  clear_refids(&our_ref_ids, 1);
 
   /* Now see if we can get the drift file opened */
   drift_file = CNF_GetDriftFile(&drift_file_interval);
@@ -355,29 +402,78 @@ REF_GetLeapMode(void)
 void
 REF_ZeroReferenceIds(REF_ReferenceIds *ref_ids)
 {
-  memset(ref_ids->filter, 0, sizeof (ref_ids->filter));
-}
-
-
-/* ================================================== */
-
-void
-REF_UpdateReferenceIds(REF_ReferenceIds *ref_ids, uint8_t *fragment, int offset, int length)
-{
-  BRIEF_ASSERT(offset >= 0 && length >= 0 &&
-               offset + length <= sizeof (ref_ids->filter));
-  memcpy(ref_ids->filter + offset, fragment, length);
+  clear_refids(ref_ids, 0);
 }
 
 /* ================================================== */
 
 void
-REF_AddReferenceIds(REF_ReferenceIds *src, REF_ReferenceIds *dest)
+REF_UpdateReferenceIds(REF_ReferenceIds *ref_ids, int first_index,
+                       uint8_t *fragment, int fragment_length)
 {
-  int i;
+  BRIEF_ASSERT(first_index >= 0 && fragment_length > 0 && fragment_length % 8 == 0 &&
+               first_index * sizeof (ref_ids->values[0]) + fragment_length <=
+                 sizeof (ref_ids->values));
+  memcpy(&ref_ids->values[first_index], fragment, fragment_length);
+}
 
-  for (i = 0; i < sizeof (dest->filter); i++)
-    dest->filter[i] |= src->filter[i];
+/* ================================================== */
+
+void
+REF_CombineReferenceIds(REF_ReferenceIds *dest, int n, double *weights,
+                        REF_ReferenceIds **sources)
+{
+  int i, j, k, vals, max_index;
+  double *shares, share;
+  uint64_t *ids, id;
+
+  clear_refids(dest, 0);
+
+  if (n <= 0)
+    return;
+
+  /* TODO: avoid these allocations */
+  shares = MallocArray(double, n * NTP_REFID_LIST_LENGTH);
+  ids = MallocArray(uint64_t, n * NTP_REFID_LIST_LENGTH);
+
+  /* TODO: merge lists sorted by ID to reduce time complexity */
+  for (i = vals = 0; i < n; i++) {
+    for (j = 0; j < NTP_REFID_LIST_LENGTH; j++) {
+      id = get_refids_id(sources[i], j);
+      if (id == 0)
+        break;
+
+      share = get_refids_share(sources[i], j);
+
+      for (k = 0; k < vals; k++) {
+        if (ids[k] == id) {
+          shares[k] += weights[i] * share;
+          break;
+        }
+      }
+      if (k == vals) {
+        BRIEF_ASSERT(vals < n * NTP_REFID_LIST_LENGTH);
+        ids[vals] = id;
+        shares[vals] = weights[i] * share;
+        vals++;
+      }
+    }
+  }
+
+  for (i = 0; i < NTP_REFID_LIST_LENGTH; i++) {
+    for (j = 0, max_index = -1; j < vals; j++) {
+      if (ids[j] != 0 && (max_index == -1 || shares[max_index] < shares[j]))
+        max_index = j;
+    }
+    if (max_index == -1)
+      break;
+    DEBUG_LOG("Combined %d %f %lx", i, shares[max_index], ids[max_index]);
+    set_refids_value(dest, i, shares[max_index] / 2.0, ids[max_index]);
+    ids[max_index] = 0;
+  }
+
+  Free(shares);
+  Free(ids);
 }
 
 /* ================================================== */
@@ -387,12 +483,12 @@ REF_CheckReferenceIds(REF_ReferenceIds *ref_ids)
 {
   int i;
 
-  for (i = 0; i < sizeof (ref_ids->filter); i++) {
-    if ((our_own_ref_id.filter[i] & ref_ids->filter[i]) != our_own_ref_id.filter[i])
-      return 1;
+  for (i = 0; i < NTP_REFID_LIST_LENGTH; i++) {
+    if ((get_refids_id(&our_ref_ids, 0) == get_refids_id(ref_ids, i)))
+      return 0;
   }
 
-  return 0;
+  return 1;
 }
 
 /* ================================================== */
@@ -983,7 +1079,7 @@ REF_SetReference(int stratum, NTP_Leap leap, int combined_sources,
   double residual_frequency, local_abs_frequency;
   double elapsed, mono_now, update_interval, orig_root_distance;
   struct timespec now, raw_now;
-  int manual;
+  int i, manual;
 
   assert(initialised);
 
@@ -1022,8 +1118,8 @@ REF_SetReference(int stratum, NTP_Leap leap, int combined_sources,
   our_stratum = stratum + 1;
   our_ref_id = ref_id;
   if (ref_ids) {
-    our_ref_ids = our_own_ref_id;
-    REF_AddReferenceIds(ref_ids, &our_ref_ids);
+    for (i = 0; i < NTP_REFID_LIST_LENGTH - 1; i++)
+      our_ref_ids.values[i + 1] = ref_ids->values[i];
   }
   if (ref_ip)
     our_ref_ip = *ref_ip;
@@ -1166,7 +1262,7 @@ REF_SetUnsynchronised(void)
   }
 
   update_leap_status(LEAP_Unsynchronised, 0, 0);
-  our_ref_ids = our_own_ref_id;
+  clear_refids(&our_ref_ids, 1);
   our_ref_ip.family = IPADDR_INET4;
   our_ref_ip.addr.in4 = 0;
   our_stratum = 0;
